@@ -5,10 +5,22 @@
  * Contains all tunables: geometry, noise models, PID gains, RAMSETE / LTV
  * parameters, feedforward constants, sensor offsets, and localization config.
  *
- * Localization internals use metres and a math heading convention:
- *   θ = 0 along +X, positive CCW.
- * Sensor mounting dimensions are configured in inches (robot right/forward)
- * and converted to metres/math-frame constants below.
+ * ═ CANONICAL INTERNAL LOCALIZATION CONVENTION ═
+ *
+ * All internal pose, odometry, and sensor fusion use:
+ *   • Position units: metres
+ *   • Heading units: radians
+ *   • Field frame: +X east/forward (θ=0), +Y north/left, positive CCW
+ *
+ * VEX GPS convention (API boundary only):
+ *   • Position units: metres (Cartesian, origin at field center)
+ *   • Heading: 0° = north, 90° = east, positive clockwise (degrees)
+ *
+ * Conversions between the two are applied ONLY at API boundaries:
+ *   – Reading GPS sensor → convert to internal frame
+ *   – Writing to GPS init → convert from internal frame
+ *
+ * All internal offsets, paths, and sensor transforms use the internal convention.
  */
 #pragma once
 
@@ -31,20 +43,45 @@ inline float wrapAngleRadians(float angleRad) {
     return std::atan2(std::sin(angleRad), std::cos(angleRad));
 }
 
-// Compass heading: 0° = +Y (north), positive clockwise → math radians
-inline float compassDegToMathRad(float headingDeg) {
-    float compassRad = headingDeg * static_cast<float>(M_PI) / 180.0f;
-    return wrapAngleRadians(static_cast<float>(M_PI / 2.0) - compassRad);
+/**
+ * Convert VEX GPS compass heading (0° = north, CW positive) to internal heading
+ * (0° = east/forward, CCW positive).
+ *
+ * @param compassDeg  VEX compass heading in degrees [0, 360)
+ * @return internal heading in radians
+ */
+inline float gpsHeadingDegToInternalRad(float compassDeg) {
+    // GPS: 0° = north (+Y), 90° = east (+X), etc., CW positive
+    // Internal: 0° = east (+X), 90° = north (+Y), CCW positive
+    // Transform: θ_internal = π/2 - θ_gps_rad
+    float gpsRad = compassDeg * static_cast<float>(M_PI) / 180.0f;
+    return wrapAngleRadians(static_cast<float>(M_PI / 2.0) - gpsRad);
 }
 
-// Math radians → compass heading in [0, 360)
-inline float mathRadToCompassDeg(float headingRad) {
-    float wrapped = wrapAngleRadians(headingRad);
-    float compassRad = static_cast<float>(M_PI / 2.0) - wrapped;
-    float deg = compassRad * 180.0f / static_cast<float>(M_PI);
+/**
+ * Convert internal heading (0° = east/forward, CCW positive) to VEX GPS
+ * compass heading (0° = north, CW positive).
+ *
+ * @param internalRad  internal heading in radians
+ * @return GPS compass heading in degrees [0, 360)
+ */
+inline float internalRadToGpsHeadingDeg(float internalRad) {
+    // Inverse: θ_gps_rad = π/2 - θ_internal
+    float wrapped = wrapAngleRadians(internalRad);
+    float gpsRad = static_cast<float>(M_PI / 2.0) - wrapped;
+    float deg = gpsRad * 180.0f / static_cast<float>(M_PI);
     while (deg < 0.0f) deg += 360.0f;
     while (deg >= 360.0f) deg -= 360.0f;
     return deg;
+}
+
+// Legacy aliases for backward compatibility
+inline float compassDegToMathRad(float headingDeg) {
+    return gpsHeadingDegToInternalRad(headingDeg);
+}
+
+inline float mathRadToCompassDeg(float headingRad) {
+    return internalRadToGpsHeadingDeg(headingRad);
 }
 
 // ── Startup Pose Mode ───────────────────────────────────────────────────────
@@ -120,9 +157,20 @@ inline Eigen::Vector2f transformGpsToFieldFrame(const Eigen::Vector2f& rawPosM) 
 }
 
 // ── MCL Sensor Mounting Offsets (inches, robot frame) ──────────────────────
-// Raw tuning inputs in inches (*_IN):
-//   +offsetX = robot-right, -offsetX = robot-left
-//   +offsetY = robot-forward, -offsetY = robot-backward
+// 
+// Raw tuning inputs in ROBOT frame (mechanics-facing):
+//   +offsetX_IN = robot-right, -offsetX_IN = robot-left
+//   +offsetY_IN = robot-forward, -offsetY_IN = robot-backward
+//
+// Converted to INTERNAL frame (+X forward/east, +Y left/north, CCW positive):
+//   offset_X_M (forward)  = +offsetY_IN (robot forward) * IN_TO_M
+//   offset_Y_M (left)     = -offsetX_IN (robot left is -X_robot = +Y_internal) * IN_TO_M
+//
+// This matches the structure used in drivetrain.cpp updateOdometry():
+//   dx = dFwd * cos(θ) - dLat * sin(θ)  
+//   dy = dFwd * sin(θ) + dLat * cos(θ)
+//
+// All INTERNAL offsets should be METRES, in the (+X fwd, +Y left) convention.
 
 constexpr double MCL_LEFT_OFFSET_X_IN   = -4.625;
 constexpr double MCL_LEFT_OFFSET_Y_IN   =  0.25;
@@ -135,18 +183,20 @@ constexpr double MCL_FRONT_OFFSET_Y_IN  = -1.875;
 constexpr double MCL_GPS_OFFSET_X_IN    =  6.0;
 constexpr double MCL_GPS_OFFSET_Y_IN    = -3.75;     // 0.125" behind back distance sensor
 
-// GPS offset in metres, math robot frame (+X forward, +Y left)
+// GPS offset in metres, INTERNAL robot frame (+X forward, +Y left)
+// Computed from inches using the same convention as distance sensors
 constexpr float MCL_GPS_OFFSET_X_M = static_cast<float>(MCL_GPS_OFFSET_Y_IN) * IN_TO_M;
 constexpr float MCL_GPS_OFFSET_Y_M = static_cast<float>(-MCL_GPS_OFFSET_X_IN) * IN_TO_M;
 inline const Eigen::Vector2f GPS_OFFSET_M{MCL_GPS_OFFSET_X_M, MCL_GPS_OFFSET_Y_M};
 
-// Sensor facing angles (radians, math robot frame: +CCW)
-constexpr float MCL_LEFT_FACING_RAD  = static_cast<float>( M_PI / 2.0);  // +90°
-constexpr float MCL_RIGHT_FACING_RAD = static_cast<float>(-M_PI / 2.0);  // -90°
-constexpr float MCL_BACK_FACING_RAD  = static_cast<float>( M_PI);         // 180°
-constexpr float MCL_FRONT_FACING_RAD = 0.0f;                               //   0°
+// Sensor facing angles (radians, INTERNAL frame: θ=0 is +X forward, positive CCW)
+constexpr float MCL_LEFT_FACING_RAD  = static_cast<float>( M_PI / 2.0);  // +90° (left)
+constexpr float MCL_RIGHT_FACING_RAD = static_cast<float>(-M_PI / 2.0);  // -90° (right)
+constexpr float MCL_BACK_FACING_RAD  = static_cast<float>( M_PI);         // 180° (backward)
+constexpr float MCL_FRONT_FACING_RAD = 0.0f;                               //   0° (forward)
 
-// Distance-sensor offsets in metres, math robot frame (+X fwd, +Y left)
+// Distance-sensor offsets in metres, INTERNAL robot frame (+X fwd, +Y left)
+// Each sensor: [0] = distance from center along robot-frame +Y (fwd), [1] = along +X (left), [2] = facing angle
 inline const Eigen::Vector3f DIST_LEFT_OFFSET_M {
     static_cast<float>(MCL_LEFT_OFFSET_Y_IN) * IN_TO_M,
     static_cast<float>(-MCL_LEFT_OFFSET_X_IN) * IN_TO_M,
@@ -179,6 +229,24 @@ constexpr double MCL_FRONT_DISTANCE_WEIGHT  = 0.80;
 
 // If vertical tracking wheel is disabled (port 0), inflate MCL motion noise
 constexpr double MCL_DRIVE_ENCODER_FALLBACK_NOISE_SCALE = 1.75;
+
+// ── GPS Error Adaptive Weighting ────────────────────────────────────────────
+// When GPS error (from gps_get_error()) is good, trust GPS fully.
+// When GPS error is poor, reduce GPS influence.
+//
+// GPS stddev = base + (error - errorGood) * errorScale, clamped to [min, max]
+// If GPS error > GPS_ERROR_THRESHOLD_M, skip update entirely (Phase 5).
+// If GPS error in [errorGood, errorThreshold], inflate stddev adaptively.
+
+constexpr float GPS_STDDEV_BASE_M           = 0.05f;   // base measurement noise
+constexpr float GPS_ERROR_GOOD_M            = 0.05f;   // error threshold where we trust fully
+constexpr float GPS_ERROR_SCALE_MULTIPLIER  = 2.0f;    // stddev *= (1 + error_scale * excess_error)
+constexpr float GPS_STDDEV_MIN_M            = 0.05f;   // never go below base
+constexpr float GPS_STDDEV_MAX_M            = 0.30f;   // clamp to prevent total loss of trust
+constexpr float GPS_ERROR_THRESHOLD_M       = 0.5f;    // reject updates beyond this
+
+// Distance sensors: disable for now until unit/axis bug is fully verified
+constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;  // set true to skip distance updates
 
 // ── Starting Pose (field frame, inches / degrees) ───────────────────────────
 // Set these to where the robot is physically placed at boot.

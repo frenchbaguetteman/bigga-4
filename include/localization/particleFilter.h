@@ -109,17 +109,29 @@ public:
         for (auto* s : m_sensors) s->update();
 
         // --- 4. Weight computation (product of per-sensor likelihoods) ---
+        // Track skipped sensors for debug logging
+        std::vector<std::string> skippedSensors;
+        
         double totalWeight = 0.0;
         for (size_t i = 0; i < L; ++i) {
             Eigen::Vector3f particlePose(
                 m_particles[i].x(), m_particles[i].y(), heading.getValue());
 
             double w = 1.0;
-            for (auto* sensor : m_sensors) {
+            for (size_t sIdx = 0; sIdx < m_sensors.size(); ++sIdx) {
+                auto* sensor = m_sensors[sIdx];
                 auto likelihood = sensor->p(particlePose);
-                if (likelihood && std::isfinite(likelihood.value())) {
-                    w *= likelihood.value();
+                
+                // If sensor reading is invalid, skip it completely
+                if (!likelihood || !std::isfinite(likelihood.value())) {
+                    // Log skipped sensor only on first particle (to avoid spam)
+                    if (i == 0) {
+                        skippedSensors.push_back(std::to_string(sIdx));
+                    }
+                    continue;  // Do not multiply weight by this sensor
                 }
+                
+                w *= likelihood.value();
             }
 
             // Field-boundary enforcement
@@ -143,6 +155,16 @@ public:
         double sumSq = 0.0;
         for (double w : m_weights) sumSq += w * w;
         double ess = (sumSq > 0.0) ? (1.0 / sumSq) : 0.0;
+
+        // Log skipped sensors (once per update cycle, if any)
+        if (!skippedSensors.empty()) {
+            std::string sensorList;
+            for (size_t i = 0; i < skippedSensors.size(); ++i) {
+                if (i > 0) sensorList += ",";
+                sensorList += skippedSensors[i];
+            }
+            std::printf("[PF] Skipped sensors (invalid readings): [%s]\n", sensorList.c_str());
+        }
 
         // Weighted posterior before any optional resampling
         m_prediction = computeWeightedMean(heading.getValue());

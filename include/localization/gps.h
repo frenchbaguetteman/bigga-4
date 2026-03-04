@@ -5,6 +5,10 @@
  * Evaluates a 2-D Gaussian on (x,y) between each particle's robot-center
  * and a robot-center estimate inferred from the raw GPS sensor position plus
  * configured GPS mount offset.
+ *
+ * GPS readings are converted from VEX convention (x, y in metres; heading in
+ * compass degrees with 0° = north, CW positive) to internal convention
+ * (x, y in metres; heading in radians with 0° = east/forward, CCW positive).
  */
 #pragma once
 
@@ -20,9 +24,9 @@ class GpsSensorModel : public SensorModel {
 public:
     /**
      * @param port              PROS smart-port
-     * @param headingOffsetDeg  GPS mounting heading offset (compass degrees)
-     * @param offsetX_m         GPS mount offset X in robot math frame (metres, +fwd)
-     * @param offsetY_m         GPS mount offset Y in robot math frame (metres, +left)
+     * @param headingOffsetDeg  GPS mounting heading offset (compass degrees, VEX convention)
+     * @param offsetX_m         GPS mount offset X in INTERNAL robot frame (metres, +fwd)
+     * @param offsetY_m         GPS mount offset Y in INTERNAL robot frame (metres, +left)
      * @param stddev            measurement noise stddev (metres)
      */
     explicit GpsSensorModel(int port,
@@ -40,10 +44,34 @@ public:
         float sx = static_cast<float>(pos.x);
         float sy = static_cast<float>(pos.y);
 
-        // Reject non-finite or absurd magnitudes
-        if (!LocMath::isFinite(sx) || !LocMath::isFinite(sy) ||
-            std::fabs(sx) > LocMath::GPS_ABSURD_LIMIT_M ||
+        // Reject non-finite readings
+        if (!LocMath::isFinite(sx) || !LocMath::isFinite(sy)) {
+            m_robotCenter = std::nullopt;
+            m_lastError = -1.0f;  // signal: invalid
+            return;
+        }
+
+        // Reject absurd magnitudes (outside plausible field area)
+        if (std::fabs(sx) > LocMath::GPS_ABSURD_LIMIT_M ||
             std::fabs(sy) > LocMath::GPS_ABSURD_LIMIT_M) {
+            m_robotCenter = std::nullopt;
+            m_lastError = -1.0f;
+            return;
+        }
+
+        // Gate GPS trust using RMS error from GPS sensor
+        // Query GPS error in metres; if error is too high, skip update
+        float gpsErrorM = static_cast<float>(m_gps.get_error());
+        if (!LocMath::isFinite(gpsErrorM) || gpsErrorM < 0.0f) {
+            m_robotCenter = std::nullopt;
+            m_lastError = -1.0f;
+            return;
+        }
+        m_lastError = gpsErrorM;
+
+        // If GPS error exceeds threshold, skip this update (don't trust it)
+        constexpr float GPS_ERROR_THRESHOLD_M = 0.5f;  // config tunable
+        if (gpsErrorM > GPS_ERROR_THRESHOLD_M) {
             m_robotCenter = std::nullopt;
             return;
         }
@@ -51,13 +79,14 @@ public:
         // Transform raw GPS output into configured field frame.
         Eigen::Vector2f gpsWorld = CONFIG::transformGpsToFieldFrame(Eigen::Vector2f(sx, sy));
 
-        // Read GPS heading, apply mounting offset → robot heading
+        // Read GPS heading, apply mounting offset, convert to internal frame
         float rawHeadingDeg = static_cast<float>(m_gps.get_heading());
         if (!LocMath::isFinite(rawHeadingDeg)) {
             m_robotCenter = std::nullopt;
             return;
         }
-        float robotHeading = CONFIG::compassDegToMathRad(
+        // Convert from VEX compass (0° = north, CW+) to internal (0° = east/fwd, CCW+)
+        float robotHeading = CONFIG::gpsHeadingDegToInternalRad(
             rawHeadingDeg - m_headingOffsetDeg);
 
         // Rotate mount offset into world frame
@@ -74,11 +103,28 @@ public:
     std::optional<float> p(const Eigen::Vector3f& particle) override {
         if (!m_robotCenter) return std::nullopt;
 
+        // Adaptively adjust stddev based on GPS error
+        float currentStddev = m_stddev;
+        if (m_lastError >= 0.0f) {
+            if (m_lastError > CONFIG::GPS_ERROR_GOOD_M) {
+                // GPS error is higher than ideal; inflate stddev to reduce GPS influence
+                float excessError = m_lastError - CONFIG::GPS_ERROR_GOOD_M;
+                float inflationFactor = 1.0f + CONFIG::GPS_ERROR_SCALE_MULTIPLIER * excessError;
+                currentStddev = m_stddev * inflationFactor;
+                // Clamp to configured limits
+                currentStddev = std::max(CONFIG::GPS_STDDEV_MIN_M,
+                                       std::min(CONFIG::GPS_STDDEV_MAX_M, currentStddev));
+            }
+        }
+
         float dx = particle.x() - m_robotCenter->x();
         float dy = particle.y() - m_robotCenter->y();
         float distSq = dx * dx + dy * dy;
-        return std::exp(-distSq / (2.0f * m_stddev * m_stddev));
+        return std::exp(-distSq / (2.0f * currentStddev * currentStddev));
     }
+
+    /** Get last GPS error reading in metres (-1 if never valid). */
+    float getLastError() const { return m_lastError; }
 
 private:
     pros::Gps m_gps;
@@ -86,4 +132,5 @@ private:
     Eigen::Vector2f m_offset;
     float m_stddev;
     std::optional<Eigen::Vector2f> m_robotCenter;
+    float m_lastError = -1.0f;  // last GPS error reading (-1 = invalid)
 };

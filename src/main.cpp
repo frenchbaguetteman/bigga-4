@@ -63,8 +63,16 @@ static void renderInitStage(float progress,
 void update_loop() {
     uint32_t lastDebugMs = 0;
     while (true) {
-        // Odom updates first (via drivetrain::periodic()), then PF consumes
+        // CRITICAL ORDER:
+        // 1. Run CommandScheduler first — this calls drivetrain::periodic()
+        //    which calls updateOdometry() and accumulates m_pendingDisplacement
         CommandScheduler::run();
+        
+        // 2. Then run ParticleFilter::update() which calls the predictionFn lambda
+        //    EXACTLY ONCE. This lambda calls consumePendingDisplacement(),
+        //    which atomically returns the cached delta and zeros it.
+        //    Do NOT let both drivetrain odometry and particle filter separately
+        //    "discover" motion from raw sensors in the same tick.
         if (particleFilter) {
             particleFilter->update();
         }
@@ -74,12 +82,15 @@ void update_loop() {
             uint32_t now = pros::millis();
             if (now - lastDebugMs >= CONFIG::ODOM_DEBUG_LOG_EVERY_MS) {
                 lastDebugMs = now;
-                auto odom = drivetrain ? drivetrain->getOdomPose()
-                                       : Eigen::Vector3f(0, 0, 0);
-                auto pf   = particleFilter ? particleFilter->getPrediction()
-                                           : Eigen::Vector3f(0, 0, 0);
+                
+                // === Raw IMU heading ===
                 float imuH = drivetrain ? drivetrain->getHeading() : 0.0f;
-                float gpsX = 0, gpsY = 0;
+                
+                // === Field-aligned heading (should match IMU after alignment) ===
+                // In steady state with good initial setup, IMU heading IS field-aligned.
+                
+                // === Raw GPS x/y (in transformed field frame) ===
+                float gpsX = 0, gpsY = 0, gpsH = 0, gpsErr = -1.0f;
                 bool gpsOk = false;
                 if (uiGps) {
                     auto gp = uiGps->get_position();
@@ -89,17 +100,31 @@ void update_loop() {
                     Eigen::Vector2f gpsField = CONFIG::transformGpsToFieldFrame(rawGps);
                     gpsX = gpsField.x();
                     gpsY = gpsField.y();
-                    gpsOk = std::isfinite(gpsX) && std::isfinite(gpsY);
+                    gpsH = CONFIG::gpsHeadingDegToInternalRad(static_cast<float>(
+                        uiGps->get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
+                    gpsErr = static_cast<float>(uiGps->get_error());
+                    gpsOk = std::isfinite(gpsX) && std::isfinite(gpsY) && std::isfinite(gpsErr) && gpsErr >= 0.0f;
                 }
-                std::printf("[LOC] gps(%c)=(%+.3f,%+.3f) imu=%.2f "
-                            "odom=(%+.3f,%+.3f,%.2f) pf=(%+.3f,%+.3f,%.2f) "
-                            "fin=%d%d%d\n",
-                    gpsOk ? 'Y' : 'N', gpsX, gpsY, imuH,
+                
+                // === Odom delta per tick (from latest updateOdometry) ===
+                Eigen::Vector2f odomdelta = drivetrain ? drivetrain->getPendingDisplacementDebug()
+                                                        : Eigen::Vector2f(0, 0);
+                float deltaLen = odomdelta.norm();
+                
+                // === Final fused pose ===
+                auto odom = drivetrain ? drivetrain->getOdomPose()
+                                       : Eigen::Vector3f(0, 0, 0);
+                auto pf   = particleFilter ? particleFilter->getPrediction()
+                                           : Eigen::Vector3f(0, 0, 0);
+                
+                // === Log in comprehensive format ===
+                std::printf("[LOC] odom_delta=%.4f imu=%.3f gps(%c)=(%.3f,%.3f,%.3f,err=%.3f) "
+                            "odom=(%.3f,%.3f,%.3f) pf=(%.3f,%.3f,%.3f)\n",
+                    deltaLen,
+                    imuH,
+                    gpsOk ? 'Y' : 'N', gpsX, gpsY, gpsH, gpsErr,
                     odom.x(), odom.y(), odom.z(),
-                    pf.x(), pf.y(), pf.z(),
-                    LocMath::isFinitePose(odom) ? 1 : 0,
-                    LocMath::isFinitePose(pf) ? 1 : 0,
-                    LocMath::isFinite(imuH) ? 1 : 0);
+                    pf.x(), pf.y(), pf.z());
             }
         }
 
@@ -275,7 +300,7 @@ static Eigen::Vector3f acquireInitialPose() {
         return configPose;
     }
 
-    float gpsHeadingRad = CONFIG::compassDegToMathRad(static_cast<float>(
+    float gpsHeadingRad = CONFIG::gpsHeadingDegToInternalRad(static_cast<float>(
         gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
     float imuHeadingRad = drivetrain->getHeading();
 
@@ -353,7 +378,7 @@ static void localizationInit() {
     sensors.push_back(&gpsSensor);
 
     auto predictionFn = [&]() -> Eigen::Vector2f {
-        return drivetrain->getDisplacement();
+        return drivetrain->consumePendingDisplacement();
     };
     auto angleFn = [&]() -> QAngle {
         return QAngle(drivetrain->getHeading());
@@ -363,6 +388,35 @@ static void localizationInit() {
     drivetrain->syncLocalizationReference(startPose);
 
     renderInitStage(0.90f, "Init localization", "Starting filter...");
+
+    // === Localization Configuration Diagnostics ===
+    std::printf("\n[LOC_CONFIG] ═════════════════════════════════════════════════\n");
+    std::printf("[LOC_CONFIG] Canonical Internal Frame Convention:\n");
+    std::printf("[LOC_CONFIG]   Position: metres\n");
+    std::printf("[LOC_CONFIG]   Heading:  radians (0 = +X east/forward, CCW+)\n");
+    std::printf("[LOC_CONFIG]   Field:    +X east, +Y north/left\n");
+    std::printf("[LOC_CONFIG]\n");
+    std::printf("[LOC_CONFIG] Startup Pose Mode: ");
+    switch (CONFIG::STARTUP_POSE_MODE) {
+        case CONFIG::StartupPoseMode::ConfiguredStartPoseOnly:
+            std::printf("ConfiguredStartPoseOnly\n");
+            break;
+        case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading:
+            std::printf("GPSXYPlusIMUHeading\n");
+            break;
+        case CONFIG::StartupPoseMode::FullGPSInit:
+            std::printf("FullGPSInit\n");
+            break;
+        default:
+            std::printf("UNKNOWN\n");
+    }
+    std::printf("[LOC_CONFIG] Start Pose: (%.3f, %.3f, %.3f rad)\n",
+        startPose.x(), startPose.y(), startPose.z());
+    std::printf("[LOC_CONFIG] GPS Error Threshold: %.3f m\n", CONFIG::GPS_ERROR_THRESHOLD_M);
+    std::printf("[LOC_CONFIG] Distance Sensors Disabled: %s\n",
+        CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING ? "YES" : "NO");
+    std::printf("[LOC_CONFIG] Active Sensors: %zu\n", sensors.size());
+    std::printf("[LOC_CONFIG] ═════════════════════════════════════════════════\n\n");
 
     particleFilter = new ParticleFilter(
         predictionFn, angleFn, sensors,

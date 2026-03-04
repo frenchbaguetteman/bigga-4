@@ -78,7 +78,21 @@ public:
     /** Reset IMU heading to a given value. */
     void resetHeading(float heading = 0.0f);
 
-    /** Delta displacement since last call (for localization prediction). */
+    /**
+     * Consume the pending displacement delta accumulated by updateOdometry()
+     * since the last call to getDisplacement() or consumePendingDisplacement().
+     * This is the authoritative interface for MCL prediction.
+     *
+     * Returns the field-frame delta (dx, dy) and clears the internal buffer.
+     * Called exactly once per tick by ParticleFilter::update() after
+     * CommandScheduler::run() has executed drivetrain::periodic().
+     */
+    Eigen::Vector2f consumePendingDisplacement();
+
+    /** Get latest pending displacement WITHOUT consuming it (debug only). */
+    Eigen::Vector2f getPendingDisplacementDebug() const { return m_pendingDisplacement; }
+
+    /** Legacy alias; use consumePendingDisplacement() for MCL. */
     Eigen::Vector2f getDisplacement();
 
     /** Forward distance in metres (from tracking wheel or drive encoders). */

@@ -33,11 +33,31 @@ public:
 
     void update() override {
         int raw = m_sensor.get();
-        m_reading = (raw > 0 && raw < 9999) ?
-            std::optional<float>(raw / 1000.0f) : std::nullopt;  // mm → m
+        // Reject failed readings (returns PROS_ERR or 9999 when no object detected)
+        // Valid range: 1 mm to ~9998 mm
+        if (raw <= 0 || raw >= 9999) {
+            m_reading = std::nullopt;
+            return;
+        }
+        
+        // Convert mm to metres
+        float distM = raw / 1000.0f;
+        
+        // Reject non-finite values (sanity check)
+        if (!LocMath::isFinite(distM) || distM < 0.0f) {
+            m_reading = std::nullopt;
+            return;
+        }
+        
+        m_reading = distM;
     }
 
     std::optional<float> p(const Eigen::Vector3f& particle) override {
+        // Skip distance sensors entirely if debug flag is set
+        if (CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING) {
+            return std::nullopt;
+        }
+        
         if (!m_reading) return std::nullopt;
         if (!LocMath::isFinitePose(particle)) return std::nullopt;
 

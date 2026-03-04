@@ -165,8 +165,8 @@ void Drivetrain::syncLocalizationReference(const Eigen::Vector3f& pose) {
     if (!LocMath::isFinitePose(pose)) {
         std::printf("[ODOM] syncLocalizationReference non-finite input, forcing origin\n");
     }
-    // 1. IMU heading
-    m_imu.set_heading(CONFIG::mathRadToCompassDeg(safePose.z()));
+    // 1. IMU heading (convert internal radians → VEX GPS compass degrees)
+    m_imu.set_heading(CONFIG::internalRadToGpsHeadingDeg(safePose.z()));
     // 2. Odom pose
     m_pose = safePose;
     // 3. Zero encoder baselines
@@ -187,7 +187,7 @@ float Drivetrain::getHeading() const {
         return 0.0f;
     }
 
-    const float h = CONFIG::compassDegToMathRad(rawHeadingDeg);
+    const float h = CONFIG::gpsHeadingDegToInternalRad(rawHeadingDeg);
     if (!LocMath::isFinite(h)) {
         if (LocMath::isFinite(m_prevHeading)) return m_prevHeading;
         if (LocMath::isFinite(m_pose.z())) return m_pose.z();
@@ -197,13 +197,13 @@ float Drivetrain::getHeading() const {
 }
 
 void Drivetrain::resetHeading(float heading) {
-    m_imu.set_heading(CONFIG::mathRadToCompassDeg(heading));
+    m_imu.set_heading(CONFIG::internalRadToGpsHeadingDeg(heading));
     syncOdometryState();
     m_prevHeading = heading;
     m_pose.z() = heading;
 }
 
-Eigen::Vector2f Drivetrain::getDisplacement() {
+Eigen::Vector2f Drivetrain::consumePendingDisplacement() {
     // Return displacement accumulated by updateOdometry() since last call
     Eigen::Vector2f d = m_pendingDisplacement;
     if (!LocMath::isFiniteVec2(d)) {
@@ -212,6 +212,11 @@ Eigen::Vector2f Drivetrain::getDisplacement() {
     }
     m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
     return d;
+}
+
+Eigen::Vector2f Drivetrain::getDisplacement() {
+    // Legacy alias for backward compatibility
+    return consumePendingDisplacement();
 }
 
 float Drivetrain::getForwardDistance() const {
