@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <optional>
+#include <algorithm>
 
 class ParticleFilter {
 public:
@@ -86,8 +87,11 @@ public:
                 translationNoise(m_rng), translationNoise(m_rng));
         }
 
-        // Accumulate distance for rate limiting
-        m_distanceSinceUpdate += delta.norm();
+        // Accumulate distance for rate limiting (ignore tiny stationary creep)
+        float deltaNorm = delta.norm();
+        if (deltaNorm >= CONFIG::PF_STATIONARY_DEADBAND_M) {
+            m_distanceSinceUpdate += deltaNorm;
+        }
 
         // --- 2. Rate-limit check ---
         uint32_t now = pros::millis();
@@ -133,27 +137,40 @@ public:
             return m_prediction;
         }
 
-        // --- 5. Systematic (low-variance) resampling  O(L) ---
-        std::vector<Eigen::Vector2f> oldParticles = m_particles;
+        // Normalize weights and compute ESS
+        for (double& w : m_weights) w /= totalWeight;
+        double sumSq = 0.0;
+        for (double w : m_weights) sumSq += w * w;
+        double ess = (sumSq > 0.0) ? (1.0 / sumSq) : 0.0;
 
-        const double avgWeight = totalWeight / static_cast<double>(L);
-        std::uniform_real_distribution<double> dist(0.0, avgWeight);
-        const double randWeight = dist(m_rng);
+        // Weighted posterior before any optional resampling
+        m_prediction = computeWeightedMean(heading.getValue());
 
-        size_t j = 0;
-        double cumulativeWeight = 0.0;
+        // --- 5. ESS-gated systematic resampling  O(L) ---
+        const double essThreshold = 0.5 * static_cast<double>(L);
+        if (ess < essThreshold) {
+            std::vector<Eigen::Vector2f> oldParticles = m_particles;
 
-        for (size_t i = 0; i < L; ++i) {
-            const double threshold = static_cast<double>(i) * avgWeight + randWeight;
-            while (cumulativeWeight < threshold && j < L) {
-                cumulativeWeight += m_weights[j];
-                ++j;
+            const double step = 1.0 / static_cast<double>(L);
+            std::uniform_real_distribution<double> dist(0.0, step);
+            const double start = dist(m_rng);
+
+            size_t j = 0;
+            double cumulativeWeight = m_weights[0];
+
+            for (size_t i = 0; i < L; ++i) {
+                const double threshold = start + static_cast<double>(i) * step;
+                while (threshold > cumulativeWeight && j + 1 < L) {
+                    ++j;
+                    cumulativeWeight += m_weights[j];
+                }
+                m_particles[i] = oldParticles[j];
             }
-            m_particles[i] = oldParticles[j > 0 ? j - 1 : 0];
+
+            std::fill(m_weights.begin(), m_weights.end(), 1.0 / static_cast<double>(L));
         }
 
-        // --- 6. Posterior estimate ---
-        m_prediction = computeMean(heading.getValue());
+        // --- 6. Posterior estimate is already weighted-pre-resample ---
         m_lastUpdateTime = now;
         m_distanceSinceUpdate = 0.0f;
 
@@ -196,6 +213,24 @@ private:
         for (const auto& p : m_particles) sum += p;
         sum /= static_cast<float>(L);
         return Eigen::Vector3f(sum.x(), sum.y(), heading);
+    }
+
+    Eigen::Vector3f computeWeightedMean(float heading) const {
+        Eigen::Vector2d sum(0.0, 0.0);
+        double total = 0.0;
+        for (size_t i = 0; i < L; ++i) {
+            const double w = m_weights[i];
+            sum.x() += static_cast<double>(m_particles[i].x()) * w;
+            sum.y() += static_cast<double>(m_particles[i].y()) * w;
+            total += w;
+        }
+
+        if (total <= 0.0) return computeMean(heading);
+
+        sum /= total;
+        return Eigen::Vector3f(static_cast<float>(sum.x()),
+                               static_cast<float>(sum.y()),
+                               heading);
     }
 
     static bool outOfField(const Eigen::Vector2f& p) {

@@ -2,8 +2,9 @@
  * @file gps.h
  * VEX GPS sensor likelihood model.
  *
- * Evaluates a 2-D Gaussian on the (x,y) distance between the GPS reading
- * and each particle.  Supports a heading offset for rear-facing GPS mounting.
+ * Evaluates a 2-D Gaussian on (x,y) between each particle's robot-center
+ * and a robot-center estimate inferred from the raw GPS sensor position plus
+ * configured GPS mount offset.
  */
 #pragma once
 
@@ -18,20 +19,14 @@ class GpsSensorModel : public SensorModel {
 public:
     /**
      * @param port              PROS smart-port
-     * @param headingOffsetDeg  heading offset of GPS relative to robot forward (degrees)
-     * @param offsetX           GPS offset X in robot math frame (+forward, metres)
-     * @param offsetY           GPS offset Y in robot math frame (+left, metres)
+     * @param gpsOffsetMeters   GPS offset in robot math frame (+forward, +left), metres
      * @param stddev            measurement noise stddev (metres)
      */
     explicit GpsSensorModel(int port,
-                            double headingOffsetDeg = 0.0,
-                            float offsetX = 0.0f,
-                            float offsetY = 0.0f,
+                            Eigen::Vector2f gpsOffsetMeters = Eigen::Vector2f(0.0f, 0.0f),
                             float stddev = 0.05f)
         : m_gps(port)
-        , m_headingOffsetDeg(headingOffsetDeg)
-        , m_offsetX(offsetX)
-        , m_offsetY(offsetY)
+        , m_offset(gpsOffsetMeters)
         , m_stddev(stddev) {}
 
     void update() override {
@@ -44,35 +39,33 @@ public:
             return;
         }
 
-        // Convert GPS-reported heading into robot math heading and
-        // transform sensor position -> robot-centre position.
-        float robotHeading = CONFIG::compassDegToMathRad(
-            static_cast<float>(m_gps.get_heading() - m_headingOffsetDeg));
-
-        float cosT = std::cos(robotHeading);
-        float sinT = std::sin(robotHeading);
-
-        float cx = sx - (m_offsetX * cosT - m_offsetY * sinT);
-        float cy = sy - (m_offsetX * sinT + m_offsetY * cosT);
-
-        m_reading = Eigen::Vector2f(cx, cy);
+        // Store raw GPS sensor measurement in world frame.
+        m_reading = Eigen::Vector2f(sx, sy);
     }
 
     std::optional<float> p(const Eigen::Vector3f& particle) override {
         if (!m_reading) return std::nullopt;
-        float dx = particle.x() - m_reading->x();
-        float dy = particle.y() - m_reading->y();
+
+        // Transform GPS offset (robot frame) into world frame using particle heading.
+        const float theta = particle.z();
+        const float cosT = std::cos(theta);
+        const float sinT = std::sin(theta);
+        Eigen::Vector2f offsetWorld(
+            m_offset.x() * cosT - m_offset.y() * sinT,
+            m_offset.x() * sinT + m_offset.y() * cosT);
+
+        // Convert measured sensor position to inferred robot-centre position.
+        Eigen::Vector2f robotCenterFromGps = *m_reading - offsetWorld;
+
+        float dx = particle.x() - robotCenterFromGps.x();
+        float dy = particle.y() - robotCenterFromGps.y();
         float distSq = dx * dx + dy * dy;
         return std::exp(-distSq / (2.0f * m_stddev * m_stddev));
     }
 
-    double getHeadingOffsetDeg() const { return m_headingOffsetDeg; }
-
 private:
     pros::Gps m_gps;
-    double    m_headingOffsetDeg;
-    float     m_offsetX;
-    float     m_offsetY;
+    Eigen::Vector2f m_offset;
     float     m_stddev;
     std::optional<Eigen::Vector2f> m_reading;
 };

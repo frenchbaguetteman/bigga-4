@@ -3,25 +3,14 @@
  * Brain-screen autonomous selector implementation.
  */
 #include "ui/autonSelector.h"
-#include "pros/llemu.hpp"
+#include "ui/brainScreen.h"
 #include <cstdio>
 #include <cmath>
-
-// ── LLEMU button callbacks (must be free functions) ─────────────────────────
-
-static void on_left()   { AutonSelector::prevAuton();   }
-static void on_center() { AutonSelector::toggleAlliance(); }
-static void on_right()  { AutonSelector::nextAuton();   }
 
 // ── Static methods ──────────────────────────────────────────────────────────
 
 void AutonSelector::init() {
-    // LCD should already be initialized by main, but call again to be safe
-    // (multiple calls are harmless)
-    pros::lcd::initialize();
-    pros::lcd::register_btn0_cb(on_left);
-    pros::lcd::register_btn1_cb(on_center);
-    pros::lcd::register_btn2_cb(on_right);
+    // No-op for LVGL UI. Kept for compatibility with existing call sites.
 }
 
 void AutonSelector::nextAuton() {
@@ -35,6 +24,19 @@ void AutonSelector::prevAuton() {
 
 void AutonSelector::toggleAlliance() {
     s_alliance = (s_alliance == Alliance::RED) ? Alliance::BLUE : Alliance::RED;
+}
+
+void AutonSelector::selectAlliance(Alliance alliance) {
+    s_alliance = alliance;
+}
+
+void AutonSelector::selectAuton(Auton auton) {
+    for (size_t i = 0; i < s_autonList.size(); ++i) {
+        if (s_autonList[i] == auton) {
+            s_index = static_cast<int>(i);
+            return;
+        }
+    }
 }
 
 Auton AutonSelector::getAuton() {
@@ -55,44 +57,18 @@ std::string AutonSelector::getAllianceStr() {
 
 void AutonSelector::render(const Eigen::Vector3f& pose,
                            const std::string& status) {
-    float xIn  = pose.x() * 39.3701f;   // metres → inches for display
-    float yIn  = pose.y() * 39.3701f;
-    float tDeg = pose.z() * 180.0f / static_cast<float>(M_PI);
-
-    pros::lcd::print(0, "2654E Echo");
-    pros::lcd::print(1, "<< %s >>", getAutonStr().c_str());
-    pros::lcd::print(2, "Alliance: %s", getAllianceStr().c_str());
-    pros::lcd::print(3, " ");
-    pros::lcd::print(4, "Pose: (%.1f, %.1f) in", xIn, yIn);
-    pros::lcd::print(5, "Heading: %.1f deg", tDeg);
-    pros::lcd::print(6, "%s", status.c_str());
-    pros::lcd::print(7, "[<Prev]  [Alliance]  [Next>]");
+    BrainScreen::RuntimeViewModel vm;
+    vm.pose = pose;
+    vm.auton = getAutonStr();
+    vm.alliance = getAllianceStr();
+    vm.status = status;
+    BrainScreen::renderRuntime(vm);
 }
 
 void AutonSelector::renderInit(float progress, const std::string& status) {
-    if (!std::isfinite(progress)) progress = 0.0f;
-    if (progress < 0.0f) progress = 0.0f;
-    if (progress > 1.0f) progress = 1.0f;
-
-    constexpr int barWidth = 16;
-    int filled = static_cast<int>(std::round(progress * barWidth));
-    if (filled < 0) filled = 0;
-    if (filled > barWidth) filled = barWidth;
-
-    char bar[barWidth + 1];
-    for (int i = 0; i < barWidth; ++i) bar[i] = (i < filled) ? '#' : '-';
-    bar[barWidth] = '\0';
-
-    int pct = static_cast<int>(std::round(progress * 100.0f));
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
-
-    pros::lcd::print(0, "2654E Echo");
-    pros::lcd::print(1, "Initializing...");
-    pros::lcd::print(2, "[%s] %3d%%", bar, pct);
-    pros::lcd::print(3, "%s", status.c_str());
-    pros::lcd::print(4, " ");
-    pros::lcd::print(5, " ");
-    pros::lcd::print(6, " ");
-    pros::lcd::print(7, "Please wait");
+    BrainScreen::InitViewModel vm;
+    vm.progress = progress;
+    vm.stageTitle = "Startup";
+    vm.detail = status;
+    BrainScreen::renderInit(vm);
 }

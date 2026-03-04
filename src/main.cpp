@@ -10,9 +10,11 @@
  * opcontrol()  cancels it and runs arcade drive + trigger bindings.
  */
 #include "main.h"
+#include "ui/brainScreen.h"
 #include <cstdio>
 #include <cmath>
 #include <string>
+#include <memory>
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global subsystems & localization
@@ -36,12 +38,23 @@ static Command* autonCommand = nullptr;
 // ═══════════════════════════════════════════════════════════════════════════
 
 static std::function<Eigen::Vector3f()> poseSource;
+static std::unique_ptr<pros::Gps> uiGps;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Status string for screen (only touched from screen task after init)
 // ═══════════════════════════════════════════════════════════════════════════
 
 static std::string screenStatus = "";
+
+static void renderInitStage(float progress,
+                            const std::string& stage,
+                            const std::string& detail = "") {
+    BrainScreen::InitViewModel vm;
+    vm.progress = progress;
+    vm.stageTitle = stage;
+    vm.detail = detail;
+    BrainScreen::renderInit(vm);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Periodic task: command scheduler @ 10 ms
@@ -63,9 +76,32 @@ void update_loop() {
 
 void screen_update_loop() {
     while (true) {
-        Eigen::Vector3f pose = poseSource ? poseSource()
-                                          : Eigen::Vector3f(0, 0, 0);
-        AutonSelector::render(pose, screenStatus);
+        BrainScreen::RuntimeViewModel vm;
+
+        vm.auton = AutonSelector::getAutonStr();
+        vm.alliance = AutonSelector::getAllianceStr();
+        vm.status = screenStatus;
+
+        vm.pureOdomPose = drivetrain ? drivetrain->getOdomPose()
+                                     : Eigen::Vector3f(0, 0, 0);
+        vm.pureMclPose = particleFilter ? particleFilter->getPrediction()
+                                        : vm.pureOdomPose;
+
+        vm.combinedPose = poseSource ? poseSource() : vm.pureMclPose;
+        vm.pose = vm.combinedPose;
+
+        if (uiGps) {
+            auto pos = uiGps->get_position();
+            float gx = static_cast<float>(pos.x);
+            float gy = static_cast<float>(pos.y);
+            float gh = CONFIG::compassDegToMathRad(static_cast<float>(
+                uiGps->get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
+            if (std::isfinite(gx) && std::isfinite(gy) && std::isfinite(gh)) {
+                vm.gpsPose = Eigen::Vector3f(gx, gy, gh);
+            }
+        }
+
+        BrainScreen::renderRuntime(vm);
         pros::delay(50);
     }
 }
@@ -154,7 +190,7 @@ static Eigen::Vector3f acquireInitialPose() {
         float progress = 0.3f + 0.5f * (static_cast<float>(i) / maxPolls);
         char buf[40];
         std::snprintf(buf, sizeof(buf), "GPS: poll %d/%d", i + 1, maxPolls);
-        AutonSelector::renderInit(progress, buf);
+        renderInitStage(progress, "Init localization", buf);
 
         if (stableCount >= CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
             break;
@@ -164,7 +200,7 @@ static Eigen::Vector3f acquireInitialPose() {
     }
 
     if (!hasLast || stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
-        AutonSelector::renderInit(0.85f, "GPS timeout - config");
+        renderInitStage(0.85f, "Init localization", "GPS timeout - config");
         pros::delay(200);
         return configPose;
     }
@@ -173,11 +209,23 @@ static Eigen::Vector3f acquireInitialPose() {
         gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
     float imuHeadingRad = drivetrain->getHeading();
 
+    auto centerFromGps = [&](float headingRad) {
+        const float cosT = std::cos(headingRad);
+        const float sinT = std::sin(headingRad);
+        const float ox = CONFIG::GPS_OFFSET_M.x() * cosT - CONFIG::GPS_OFFSET_M.y() * sinT;
+        const float oy = CONFIG::GPS_OFFSET_M.x() * sinT + CONFIG::GPS_OFFSET_M.y() * cosT;
+        return Eigen::Vector2f(lastX - ox, lastY - oy);
+    };
+
     switch (CONFIG::STARTUP_POSE_MODE) {
-        case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading:
-            return Eigen::Vector3f(lastX, lastY, imuHeadingRad);
-        case CONFIG::StartupPoseMode::FullGPSInit:
-            return Eigen::Vector3f(lastX, lastY, gpsHeadingRad);
+        case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading: {
+            Eigen::Vector2f c = centerFromGps(imuHeadingRad);
+            return Eigen::Vector3f(c.x(), c.y(), imuHeadingRad);
+        }
+        case CONFIG::StartupPoseMode::FullGPSInit: {
+            Eigen::Vector2f c = centerFromGps(gpsHeadingRad);
+            return Eigen::Vector3f(c.x(), c.y(), gpsHeadingRad);
+        }
         default:
             return configPose;
     }
@@ -204,9 +252,7 @@ static void localizationInit() {
         static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT));
     static GpsSensorModel gpsSensor(
         CONFIG::MCL_GPS_PORT,
-        CONFIG::MCL_GPS_HEADING_OFFSET_DEG,
-        CONFIG::MCL_GPS_OFFSET_X_M,
-        CONFIG::MCL_GPS_OFFSET_Y_M);
+        CONFIG::GPS_OFFSET_M);
 
     if (CONFIG::MCL_ENABLE_DISTANCE_SENSORS) {
         if (CONFIG::MCL_ENABLE_LEFT_DISTANCE_SENSOR)  sensors.push_back(&distLeft);
@@ -224,10 +270,9 @@ static void localizationInit() {
     };
 
     Eigen::Vector3f startPose = acquireInitialPose();
-    drivetrain->resetHeading(startPose.z());
-    drivetrain->setOdomPose(startPose);
+    drivetrain->syncLocalizationReference(startPose);
 
-    AutonSelector::renderInit(0.90f, "Starting filter...");
+    renderInitStage(0.90f, "Init localization", "Starting filter...");
 
     particleFilter = new ParticleFilter(
         predictionFn, angleFn, sensors,
@@ -262,24 +307,26 @@ static void buildAutonCommand() {
  */
 void initialize() {
     // 1. LCD on — show first frame
-    pros::lcd::initialize();
-    AutonSelector::renderInit(0.0f, "Booting...");
+    BrainScreen::initialize();
+    renderInitStage(0.0f, "Boot", "Booting...");
 
     // 2. Subsystems
-    AutonSelector::renderInit(0.10f, "Init subsystems...");
+    renderInitStage(0.10f, "Init subsystems", "Creating subsystem objects");
     subsystemInit();
+    uiGps = std::make_unique<pros::Gps>(CONFIG::MCL_GPS_PORT);
 
     // 3. Localization (includes GPS poll with inline screen updates)
-    AutonSelector::renderInit(0.25f, "Init localization...");
+    renderInitStage(0.25f, "Init localization", "Preparing sensor models");
     localizationInit();
 
     // 4. Auton command
-    AutonSelector::renderInit(0.95f, "Building auton...");
+    renderInitStage(0.95f, "Init auton", "Building auton command graph");
     buildAutonCommand();
 
     // 5. Done — register selector buttons and rumble
-    AutonSelector::renderInit(1.0f, "Ready!");
+    renderInitStage(1.0f, "Ready", "Controller rumble + start tasks");
     AutonSelector::init();
+    screenStatus = "Ready";
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
     master.rumble(".");

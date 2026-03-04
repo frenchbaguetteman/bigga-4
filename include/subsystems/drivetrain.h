@@ -57,6 +57,12 @@ public:
     /** Set odometry-only pose. */
     void setOdomPose(const Eigen::Vector3f& pose);
 
+    /**
+     * Synchronize IMU + odometry reference to a localization pose.
+     * Ensures next odom delta is not polluted by stale heading/encoder baselines.
+     */
+    void syncLocalizationReference(const Eigen::Vector3f& pose);
+
     /** Backward-compatible alias for setOdomPose(). */
     void setPose(const Eigen::Vector3f& pose);
 

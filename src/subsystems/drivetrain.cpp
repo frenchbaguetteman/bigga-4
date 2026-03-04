@@ -11,6 +11,12 @@
 #include "utils/motor.h"
 #include <cmath>
 
+namespace {
+inline float normalizeAngleRad(float a) {
+    return std::atan2(std::sin(a), std::cos(a));
+}
+}
+
 // ── Construction ────────────────────────────────────────────────────────────
 
 Drivetrain::Drivetrain()
@@ -105,7 +111,7 @@ void Drivetrain::updateOdometry() {
 
     float dFwd = fwd - m_prevForwardDist;
     float dLat = lat - m_prevLateralDist;
-    float dTheta = CONFIG::wrapAngleRadians(heading - m_prevHeading);
+    float dTheta = normalizeAngleRad(heading - m_prevHeading);
 
     m_prevForwardDist = fwd;
     m_prevLateralDist = lat;
@@ -125,9 +131,16 @@ Eigen::Vector3f Drivetrain::getPose() const { return getOdomPose(); }
 
 void Drivetrain::setOdomPose(const Eigen::Vector3f& pose) {
     m_pose = pose;
+    syncOdometryState();
     m_prevHeading = pose.z();
-    m_prevForwardDist = rawForwardDistance();
-    m_prevLateralDist = rawLateralDistance();
+}
+
+void Drivetrain::syncLocalizationReference(const Eigen::Vector3f& pose) {
+    m_imu.set_heading(CONFIG::mathRadToCompassDeg(pose.z()));
+    m_pose = pose;
+    syncOdometryState();
+    m_prevHeading = pose.z();
+    m_pose.z() = pose.z();
 }
 
 void Drivetrain::setPose(const Eigen::Vector3f& pose) { setOdomPose(pose); }
@@ -151,10 +164,14 @@ Eigen::Vector2f Drivetrain::getDisplacement() {
     float dFwd = fwd - m_prevForwardDist;
     float dLat = lat - m_prevLateralDist;
 
-    // Displacement in field frame
+    // Match updateOdometry() convention: midpoint rotation during heading change.
+    float dTheta = normalizeAngleRad(heading - m_prevHeading);
+    float midTheta = heading - dTheta / 2.0f;
+
+    // Displacement in field frame (pure peek; does not mutate odom state).
     return Eigen::Vector2f(
-        dFwd * std::cos(heading) - dLat * std::sin(heading),
-        dFwd * std::sin(heading) + dLat * std::cos(heading));
+        dFwd * std::cos(midTheta) - dLat * std::sin(midTheta),
+        dFwd * std::sin(midTheta) + dLat * std::cos(midTheta));
 }
 
 float Drivetrain::getForwardDistance() const {

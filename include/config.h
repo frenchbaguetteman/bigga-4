@@ -24,7 +24,8 @@ namespace CONFIG {
 
 // ── Shared conversion helpers ──────────────────────────────────────────────
 
-constexpr float INCH_TO_M = 0.0254f;
+constexpr float IN_TO_M   = 0.0254f;
+constexpr float INCH_TO_M = IN_TO_M;  // backward-compatible alias
 
 inline float wrapAngleRadians(float angleRad) {
     return std::atan2(std::sin(angleRad), std::cos(angleRad));
@@ -121,8 +122,9 @@ constexpr double MCL_GPS_OFFSET_Y    = -3.75;     // 0.125" behind back distance
 
 // Converted GPS offset in metres, math robot frame:
 //   +X = forward, +Y = left
-constexpr float MCL_GPS_OFFSET_X_M = static_cast<float>(MCL_GPS_OFFSET_Y) * INCH_TO_M;
-constexpr float MCL_GPS_OFFSET_Y_M = static_cast<float>(-MCL_GPS_OFFSET_X) * INCH_TO_M;
+constexpr float MCL_GPS_OFFSET_X_M = static_cast<float>(MCL_GPS_OFFSET_Y) * IN_TO_M;
+constexpr float MCL_GPS_OFFSET_Y_M = static_cast<float>(-MCL_GPS_OFFSET_X) * IN_TO_M;
+inline const Eigen::Vector2f GPS_OFFSET_M{MCL_GPS_OFFSET_X_M, MCL_GPS_OFFSET_Y_M};
 
 // Sensor facing angles (radians, math robot frame: +CCW)
 constexpr float MCL_LEFT_FACING  = static_cast<float>( M_PI / 2.0);  // +90°
@@ -132,20 +134,20 @@ constexpr float MCL_FRONT_FACING = 0.0f;                               //   0°
 
 // Distance-sensor offsets in metres, math robot frame (+X fwd, +Y left)
 inline const Eigen::Vector3f DIST_LEFT_OFFSET {
-    static_cast<float>(MCL_LEFT_OFFSET_Y) * INCH_TO_M,
-    static_cast<float>(-MCL_LEFT_OFFSET_X) * INCH_TO_M,
+    static_cast<float>(MCL_LEFT_OFFSET_Y) * IN_TO_M,
+    static_cast<float>(-MCL_LEFT_OFFSET_X) * IN_TO_M,
     MCL_LEFT_FACING};
 inline const Eigen::Vector3f DIST_RIGHT_OFFSET{
-    static_cast<float>(MCL_RIGHT_OFFSET_Y) * INCH_TO_M,
-    static_cast<float>(-MCL_RIGHT_OFFSET_X) * INCH_TO_M,
+    static_cast<float>(MCL_RIGHT_OFFSET_Y) * IN_TO_M,
+    static_cast<float>(-MCL_RIGHT_OFFSET_X) * IN_TO_M,
     MCL_RIGHT_FACING};
 inline const Eigen::Vector3f DIST_FRONT_OFFSET{
-    static_cast<float>(MCL_FRONT_OFFSET_Y) * INCH_TO_M,
-    static_cast<float>(-MCL_FRONT_OFFSET_X) * INCH_TO_M,
+    static_cast<float>(MCL_FRONT_OFFSET_Y) * IN_TO_M,
+    static_cast<float>(-MCL_FRONT_OFFSET_X) * IN_TO_M,
     MCL_FRONT_FACING};
 inline const Eigen::Vector3f DIST_BACK_OFFSET {
-    static_cast<float>(MCL_BACK_OFFSET_Y) * INCH_TO_M,
-    static_cast<float>(-MCL_BACK_OFFSET_X) * INCH_TO_M,
+    static_cast<float>(MCL_BACK_OFFSET_Y) * IN_TO_M,
+    static_cast<float>(-MCL_BACK_OFFSET_X) * IN_TO_M,
     MCL_BACK_FACING};
 
 // ── MCL Distance Sensor Fusion Controls ─────────────────────────────────────
@@ -200,7 +202,8 @@ constexpr char WING_PORT    = 'D';
 constexpr int   NUM_PARTICLES             = 250;
 constexpr float FIELD_HALF_SIZE           = 1.78308f;  // metres (inner wall)
 constexpr float MAX_DISTANCE_SINCE_UPDATE = 0.05f;     // metres
-constexpr int   MAX_UPDATE_INTERVAL_MS    = 100;       // milliseconds
+constexpr int   MAX_UPDATE_INTERVAL_MS    = 400;       // milliseconds (less idle jitter)
+constexpr float PF_STATIONARY_DEADBAND_M  = 0.003f;    // ignore encoder creep below 3 mm/update
 
 // ── Speed / acceleration limits ─────────────────────────────────────────────
 

@@ -35,6 +35,8 @@ public:
 
     /// Flip the alliance between RED and BLUE.
     static void toggleAlliance();
+    static void selectAlliance(Alliance alliance);
+    static void selectAuton(Auton auton);
 
     /// Read the current selection.
     static Auton    getAuton();
