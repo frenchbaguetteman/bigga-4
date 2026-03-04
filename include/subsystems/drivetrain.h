@@ -48,10 +48,16 @@ public:
 
     // ── Odometry / pose ─────────────────────────────────────────────────
 
-    /** Current estimated pose (x, y, θ) in metres / radians. */
+    /** Current odometry-only pose (x, y, θ) in metres / radians. */
+    Eigen::Vector3f getOdomPose() const;
+
+    /** Backward-compatible alias for getOdomPose(). */
     Eigen::Vector3f getPose() const;
 
-    /** Set pose (e.g. from localization). */
+    /** Set odometry-only pose. */
+    void setOdomPose(const Eigen::Vector3f& pose);
+
+    /** Backward-compatible alias for setOdomPose(). */
     void setPose(const Eigen::Vector3f& pose);
 
     /** Heading from IMU (radians). */
@@ -97,4 +103,7 @@ private:
 
     /** Raw lateral distance from horizontal tracking wheel (metres, 0 if disabled). */
     float rawLateralDistance() const;
+
+    /** Align odometry previous-state caches with live sensor values. */
+    void syncOdometryState();
 };

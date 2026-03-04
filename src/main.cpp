@@ -18,12 +18,12 @@
 // Global subsystems & localization
 // ═══════════════════════════════════════════════════════════════════════════
 
-static Drivetrain* drivetrain;
-static Intakes*    intakes;
-static Lift*       lift;
-static Solenoids*  solenoids;
+static Drivetrain* drivetrain = nullptr;
+static Intakes*    intakes    = nullptr;
+static Lift*       lift       = nullptr;
+static Solenoids*  solenoids  = nullptr;
 
-static ParticleFilter* particleFilter;
+static ParticleFilter* particleFilter = nullptr;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Autonomous command — built on-demand, scheduled in autonomous()
@@ -38,45 +38,35 @@ static Command* autonCommand = nullptr;
 static std::function<Eigen::Vector3f()> poseSource;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GPS initialisation status (displayed on screen)
+// Status string for screen (only touched from screen task after init)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static std::string gpsStatus = "";
+static std::string screenStatus = "";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Periodic task: command scheduler @ 10 ms
 // ═══════════════════════════════════════════════════════════════════════════
 
-[[noreturn]] void update_loop(void*) {
+void update_loop() {
     while (true) {
-        auto start_time = pros::millis();
-
-        // Tick the localization filter
         if (particleFilter) {
             particleFilter->update();
         }
-
-        // Advance all scheduled commands
         CommandScheduler::run();
-
-        pros::c::task_delay_until(&start_time, 10);
+        pros::delay(10);
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Periodic task: brain-screen update @ 50 ms
+// Periodic task: brain-screen update @ 50 ms (started AFTER init)
 // ═══════════════════════════════════════════════════════════════════════════
 
-[[noreturn]] void screen_update_loop(void*) {
+void screen_update_loop() {
     while (true) {
-        auto start_time = pros::millis();
-
         Eigen::Vector3f pose = poseSource ? poseSource()
                                           : Eigen::Vector3f(0, 0, 0);
-
-        AutonSelector::render(pose, gpsStatus);
-
-        pros::c::task_delay_until(&start_time, 50);
+        AutonSelector::render(pose, screenStatus);
+        pros::delay(50);
     }
 }
 
@@ -87,7 +77,7 @@ static std::string gpsStatus = "";
 static void subsystemInit() {
     drivetrain = new Drivetrain();
     intakes    = new Intakes();
-    lift       = new Lift();       // stub — no hardware until re-wired
+    lift       = new Lift();
     solenoids  = new Solenoids();
 
     drivetrain->registerThis();
@@ -97,71 +87,74 @@ static void subsystemInit() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GPS initial-pose acquisition
+// GPS initial-pose acquisition (short poll — max ~2 s)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Wait for the GPS to produce stable readings and return the initial pose.
+ * Attempt to read a usable initial pose from the GPS.
  *
  * Depending on CONFIG::STARTUP_POSE_MODE:
  *   ConfiguredStartPoseOnly → return hard-coded config values immediately.
  *   GPSXYPlusIMUHeading     → GPS (x,y) + IMU heading.
  *   FullGPSInit             → GPS (x,y) + GPS heading (with offset).
  *
- * Falls back to config values if GPS never stabilises.
+ * Polls GPS up to maxPolls times (50 ms apart) looking for a stable reading.
+ * Falls back to config if it doesn't lock.
  */
 static Eigen::Vector3f acquireInitialPose() {
-    // Fallback pose from config (inches → metres)
-    constexpr float inToM = 0.0254f;
+    // Fallback pose from config (inches → metres, compass-deg → math-rad)
     Eigen::Vector3f configPose(
-        static_cast<float>(CONFIG::START_POSE_X_IN) * inToM,
-        static_cast<float>(CONFIG::START_POSE_Y_IN) * inToM,
-        static_cast<float>(CONFIG::START_POSE_THETA_DEG * M_PI / 180.0));
+        static_cast<float>(CONFIG::START_POSE_X_IN) * CONFIG::INCH_TO_M,
+        static_cast<float>(CONFIG::START_POSE_Y_IN) * CONFIG::INCH_TO_M,
+        CONFIG::compassDegToMathRad(static_cast<float>(CONFIG::START_POSE_THETA_DEG)));
 
     if (CONFIG::STARTUP_POSE_MODE ==
         CONFIG::StartupPoseMode::ConfiguredStartPoseOnly) {
-        gpsStatus = "Pose: config only";
         return configPose;
     }
 
-    // Open a temporary GPS handle for the init read
     pros::Gps gps(CONFIG::MCL_GPS_PORT);
-    pros::delay(100);  // let the sensor boot
+    pros::delay(100);
 
-    gpsStatus = "Waiting for GPS...";
-
-    uint32_t startTime = pros::millis();
+    float lastX = 0, lastY = 0;
+    bool hasLast = false;
     int stableCount = 0;
-    float lastX = 0.0f, lastY = 0.0f;
+    constexpr int maxPolls = 40;   // 40 × 50 ms = 2 s max
 
-    while (pros::millis() - startTime < CONFIG::STARTUP_GPS_MAX_WAIT_MS) {
+    for (int i = 0; i < maxPolls; ++i) {
         auto pos = gps.get_position();
         float x = static_cast<float>(pos.x);
         float y = static_cast<float>(pos.y);
 
-        // Ignore zero readings (sensor not ready)
-        if (std::abs(x) < 0.001f && std::abs(y) < 0.001f) {
-            stableCount = 0;
+        if (!std::isfinite(x) || !std::isfinite(y)) {
             pros::delay(50);
             continue;
         }
 
-        float dx = x - lastX;
-        float dy = y - lastY;
-        float drift = std::sqrt(dx * dx + dy * dy);
+        // Skip initial zeros (GPS hasn't booted yet)
+        if (!hasLast && std::abs(x) < 0.001f && std::abs(y) < 0.001f) {
+            pros::delay(50);
+            continue;
+        }
 
-        if (drift < static_cast<float>(CONFIG::STARTUP_GPS_READY_ERROR_M)) {
-            ++stableCount;
-        } else {
-            stableCount = 0;
+        if (hasLast) {
+            float dx = x - lastX, dy = y - lastY;
+            float drift = std::sqrt(dx * dx + dy * dy);
+            if (drift < static_cast<float>(CONFIG::STARTUP_GPS_READY_ERROR_M)) {
+                ++stableCount;
+            } else {
+                stableCount = 0;
+            }
         }
         lastX = x;
         lastY = y;
+        hasLast = true;
 
+        // Update loading screen inline
+        float progress = 0.3f + 0.5f * (static_cast<float>(i) / maxPolls);
         char buf[40];
-        std::snprintf(buf, sizeof(buf), "GPS: stable %d/%d",
-                      stableCount, CONFIG::STARTUP_GPS_STABLE_SAMPLES);
-        gpsStatus = buf;
+        std::snprintf(buf, sizeof(buf), "GPS: poll %d/%d", i + 1, maxPolls);
+        AutonSelector::renderInit(progress, buf);
 
         if (stableCount >= CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
             break;
@@ -170,27 +163,21 @@ static Eigen::Vector3f acquireInitialPose() {
         pros::delay(50);
     }
 
-    // If GPS never locked, fall back
-    if (stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
-        gpsStatus = "GPS timeout — using config";
+    if (!hasLast || stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
+        AutonSelector::renderInit(0.85f, "GPS timeout - config");
+        pros::delay(200);
         return configPose;
     }
 
-    gpsStatus = "GPS locked";
-
-    float gpsHeadingRad = static_cast<float>(
-        (gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG)
-        * M_PI / 180.0);
-
+    float gpsHeadingRad = CONFIG::compassDegToMathRad(static_cast<float>(
+        gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
     float imuHeadingRad = drivetrain->getHeading();
 
     switch (CONFIG::STARTUP_POSE_MODE) {
         case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading:
             return Eigen::Vector3f(lastX, lastY, imuHeadingRad);
-
         case CONFIG::StartupPoseMode::FullGPSInit:
             return Eigen::Vector3f(lastX, lastY, gpsHeadingRad);
-
         default:
             return configPose;
     }
@@ -201,7 +188,6 @@ static Eigen::Vector3f acquireInitialPose() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void localizationInit() {
-    // Sensor models — conditionally constructed based on config enables
     std::vector<SensorModel*> sensors;
 
     static DistanceSensorModel distLeft(
@@ -217,7 +203,10 @@ static void localizationInit() {
         CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::DIST_BACK_OFFSET,
         static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT));
     static GpsSensorModel gpsSensor(
-        CONFIG::MCL_GPS_PORT, CONFIG::MCL_GPS_HEADING_OFFSET_DEG);
+        CONFIG::MCL_GPS_PORT,
+        CONFIG::MCL_GPS_HEADING_OFFSET_DEG,
+        CONFIG::MCL_GPS_OFFSET_X_M,
+        CONFIG::MCL_GPS_OFFSET_Y_M);
 
     if (CONFIG::MCL_ENABLE_DISTANCE_SENSORS) {
         if (CONFIG::MCL_ENABLE_LEFT_DISTANCE_SENSOR)  sensors.push_back(&distLeft);
@@ -227,25 +216,24 @@ static void localizationInit() {
     }
     sensors.push_back(&gpsSensor);
 
-    // Prediction function: odometry displacement from drivetrain
     auto predictionFn = [&]() -> Eigen::Vector2f {
         return drivetrain->getDisplacement();
     };
-
-    // Heading function: IMU heading
     auto angleFn = [&]() -> QAngle {
         return QAngle(drivetrain->getHeading());
     };
 
-    // ── Acquire initial pose from GPS (or config fallback) ──────────────
     Eigen::Vector3f startPose = acquireInitialPose();
+    drivetrain->resetHeading(startPose.z());
+    drivetrain->setOdomPose(startPose);
+
+    AutonSelector::renderInit(0.90f, "Starting filter...");
 
     particleFilter = new ParticleFilter(
         predictionFn, angleFn, sensors,
         startPose,
         CONFIG::NUM_PARTICLES);
 
-    // Wire up the shared pose source
     poseSource = [&]() -> Eigen::Vector3f {
         return particleFilter->getPrediction();
     };
@@ -256,7 +244,6 @@ static void localizationInit() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void buildAutonCommand() {
-    // Sync the global AUTON / ALLIANCE variables from the selector
     AUTON    = AutonSelector::getAuton();
     ALLIANCE = AutonSelector::getAlliance();
 
@@ -270,56 +257,52 @@ static void buildAutonCommand() {
 
 /**
  * Runs once when the program starts.
+ * ALL screen rendering during init is done inline — no background tasks,
+ * no mutexes, no atomics.  Tasks start only after init is fully complete.
  */
 void initialize() {
-    // Start auton selector (initialises LLEMU + button callbacks)
-    AutonSelector::init();
+    // 1. LCD on — show first frame
+    pros::lcd::initialize();
+    AutonSelector::renderInit(0.0f, "Booting...");
 
-    gpsStatus = "Initialising...";
-    AutonSelector::render(Eigen::Vector3f(0, 0, 0), gpsStatus);
-
+    // 2. Subsystems
+    AutonSelector::renderInit(0.10f, "Init subsystems...");
     subsystemInit();
-    localizationInit();     // blocks briefly for GPS acquisition
 
-    // Build the auton command from current selector state
+    // 3. Localization (includes GPS poll with inline screen updates)
+    AutonSelector::renderInit(0.25f, "Init localization...");
+    localizationInit();
+
+    // 4. Auton command
+    AutonSelector::renderInit(0.95f, "Building auton...");
     buildAutonCommand();
 
-    // Start periodic tasks
-    pros::Task scheduler_task(update_loop, nullptr, "scheduler");
-    pros::Task screen_task(screen_update_loop, nullptr, "screen");
+    // 5. Done — register selector buttons and rumble
+    AutonSelector::renderInit(1.0f, "Ready!");
+    AutonSelector::init();
+
+    pros::Controller master(pros::E_CONTROLLER_MASTER);
+    master.rumble(".");
+
+    // 6. Now start background tasks
+    pros::Task::create(screen_update_loop, "screen");
+    pros::Task::create(update_loop, "scheduler");
 }
 
-/**
- * Runs while the robot is disabled.
- */
 void disabled() {}
 
-/**
- * Runs after initialize(), before autonomous (competition only).
- * The auton selector is still active here — rebuild the command so
- * the most recent selection is used.
- */
 void competition_initialize() {
     buildAutonCommand();
 }
 
-/**
- * Runs the autonomous routine.
- */
 void autonomous() {
-    // Lock in the selector state one final time
     buildAutonCommand();
-
     if (autonCommand) {
         CommandScheduler::schedule(autonCommand);
     }
 }
 
-/**
- * Runs the operator-control period.
- */
 void opcontrol() {
-    // Cancel autonomous command if still running
     if (autonCommand && autonCommand->isScheduled()) {
         autonCommand->cancel();
     }
@@ -329,37 +312,30 @@ void opcontrol() {
 
     // ── Trigger bindings ────────────────────────────────────────────────
 
-    // R1 → intake forward  (while held)
     CommandScheduler::addTrigger(
         Trigger([&]() { return master.get_digital(DIGITAL_R1); })
             .whileTrue(new IntakeSpinCommand(intakes, 127)));
 
-    // R2 → intake reverse  (while held)
     CommandScheduler::addTrigger(
         Trigger([&]() { return master.get_digital(DIGITAL_R2); })
             .whileTrue(new IntakeSpinCommand(intakes, -127)));
 
-    // L1 → toggle tongue
     CommandScheduler::addTrigger(
         Trigger([&]() { return master.get_digital(DIGITAL_L1); })
             .onTrue(shared::toggleTongue(solenoids)));
 
-    // L2 → toggle wing
     CommandScheduler::addTrigger(
         Trigger([&]() { return master.get_digital(DIGITAL_L2); })
             .onTrue(shared::toggleWing(solenoids)));
 
-    // A → toggle select1
     CommandScheduler::addTrigger(
         Trigger([&]() { return master.get_digital(DIGITAL_A); })
             .onTrue(shared::toggleSelect1(solenoids)));
 
-    // B → toggle select2
     CommandScheduler::addTrigger(
         Trigger([&]() { return master.get_digital(DIGITAL_B); })
             .onTrue(shared::toggleSelect2(solenoids)));
 
-    // ── Skills: re-schedule auton with termination predicate ────────────
     if (AUTON == Auton::SKILLS && autonCommand) {
         CommandScheduler::schedule(
             autonCommand->until([&]() {
@@ -367,15 +343,12 @@ void opcontrol() {
             }));
     }
 
-    // ── Teleop drive loop ───────────────────────────────────────────────
     while (true) {
-        // Arcade drive (left stick Y = forward, right stick X = turn)
         float forward = static_cast<float>(
             master.get_analog(ANALOG_LEFT_Y));
         float turn = static_cast<float>(
             master.get_analog(ANALOG_RIGHT_X));
 
-        // Only drive manually if no command currently owns the drivetrain
         if (drivetrain->getCurrentCommand() == nullptr) {
             drivetrain->arcade(forward, turn);
         }

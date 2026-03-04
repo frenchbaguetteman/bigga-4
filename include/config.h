@@ -5,8 +5,10 @@
  * Contains all tunables: geometry, noise models, PID gains, RAMSETE / LTV
  * parameters, feedforward constants, sensor offsets, and localization config.
  *
- * All MCL mounting offsets are in INCHES (field frame uses inches).
- * Conversion helpers are provided where metric interfaces are needed.
+ * Localization internals use metres and a math heading convention:
+ *   θ = 0 along +X, positive CCW.
+ * Sensor mounting dimensions are configured in inches (robot right/forward)
+ * and converted to metres/math-frame constants below.
  */
 #pragma once
 
@@ -19,6 +21,30 @@
 #include <vector>
 
 namespace CONFIG {
+
+// ── Shared conversion helpers ──────────────────────────────────────────────
+
+constexpr float INCH_TO_M = 0.0254f;
+
+inline float wrapAngleRadians(float angleRad) {
+    return std::atan2(std::sin(angleRad), std::cos(angleRad));
+}
+
+// Compass heading: 0° = +Y (north), positive clockwise → math radians
+inline float compassDegToMathRad(float headingDeg) {
+    float compassRad = headingDeg * static_cast<float>(M_PI) / 180.0f;
+    return wrapAngleRadians(static_cast<float>(M_PI / 2.0) - compassRad);
+}
+
+// Math radians → compass heading in [0, 360)
+inline float mathRadToCompassDeg(float headingRad) {
+    float wrapped = wrapAngleRadians(headingRad);
+    float compassRad = static_cast<float>(M_PI / 2.0) - wrapped;
+    float deg = compassRad * 180.0f / static_cast<float>(M_PI);
+    while (deg < 0.0f) deg += 360.0f;
+    while (deg >= 360.0f) deg -= 360.0f;
+    return deg;
+}
 
 // ── Startup Pose Mode ───────────────────────────────────────────────────────
 
@@ -77,7 +103,8 @@ constexpr int MCL_GPS_PORT             = 15;
 // GPS heading offset: GPS module faces backwards relative to robot forward
 constexpr double MCL_GPS_HEADING_OFFSET_DEG = 180.0;
 
-// ── MCL Sensor Mounting Offsets (inches, local robot frame) ─────────────────
+// ── MCL Sensor Mounting Offsets (inches, robot frame) ──────────────────────
+// Tuning inputs:
 //   +offsetX = robot-right, -offsetX = robot-left
 //   +offsetY = robot-forward, -offsetY = robot-backward
 
@@ -92,29 +119,33 @@ constexpr double MCL_FRONT_OFFSET_Y  = -1.875;
 constexpr double MCL_GPS_OFFSET_X    =  6.0;
 constexpr double MCL_GPS_OFFSET_Y    = -3.75;     // 0.125" behind back distance sensor
 
-// Sensor facing angles (radians, robot frame)
-constexpr float MCL_LEFT_FACING  = static_cast<float>(-M_PI / 2.0);  // -90°
-constexpr float MCL_RIGHT_FACING = static_cast<float>( M_PI / 2.0);  // +90°
-constexpr float MCL_BACK_FACING  = static_cast<float>( M_PI);        // 180°
-constexpr float MCL_FRONT_FACING = 0.0f;                              //   0°
+// Converted GPS offset in metres, math robot frame:
+//   +X = forward, +Y = left
+constexpr float MCL_GPS_OFFSET_X_M = static_cast<float>(MCL_GPS_OFFSET_Y) * INCH_TO_M;
+constexpr float MCL_GPS_OFFSET_Y_M = static_cast<float>(-MCL_GPS_OFFSET_X) * INCH_TO_M;
 
-// Distance-sensor offset vectors (x_inches, y_inches, facing_radians)
-// Used by DistanceSensorModel for ray-casting
+// Sensor facing angles (radians, math robot frame: +CCW)
+constexpr float MCL_LEFT_FACING  = static_cast<float>( M_PI / 2.0);  // +90°
+constexpr float MCL_RIGHT_FACING = static_cast<float>(-M_PI / 2.0);  // -90°
+constexpr float MCL_BACK_FACING  = static_cast<float>( M_PI);         // 180°
+constexpr float MCL_FRONT_FACING = 0.0f;                               //   0°
+
+// Distance-sensor offsets in metres, math robot frame (+X fwd, +Y left)
 inline const Eigen::Vector3f DIST_LEFT_OFFSET {
-    static_cast<float>(MCL_LEFT_OFFSET_X),
-    static_cast<float>(MCL_LEFT_OFFSET_Y),
+    static_cast<float>(MCL_LEFT_OFFSET_Y) * INCH_TO_M,
+    static_cast<float>(-MCL_LEFT_OFFSET_X) * INCH_TO_M,
     MCL_LEFT_FACING};
 inline const Eigen::Vector3f DIST_RIGHT_OFFSET{
-    static_cast<float>(MCL_RIGHT_OFFSET_X),
-    static_cast<float>(MCL_RIGHT_OFFSET_Y),
+    static_cast<float>(MCL_RIGHT_OFFSET_Y) * INCH_TO_M,
+    static_cast<float>(-MCL_RIGHT_OFFSET_X) * INCH_TO_M,
     MCL_RIGHT_FACING};
 inline const Eigen::Vector3f DIST_FRONT_OFFSET{
-    static_cast<float>(MCL_FRONT_OFFSET_X),
-    static_cast<float>(MCL_FRONT_OFFSET_Y),
+    static_cast<float>(MCL_FRONT_OFFSET_Y) * INCH_TO_M,
+    static_cast<float>(-MCL_FRONT_OFFSET_X) * INCH_TO_M,
     MCL_FRONT_FACING};
 inline const Eigen::Vector3f DIST_BACK_OFFSET {
-    static_cast<float>(MCL_BACK_OFFSET_X),
-    static_cast<float>(MCL_BACK_OFFSET_Y),
+    static_cast<float>(MCL_BACK_OFFSET_Y) * INCH_TO_M,
+    static_cast<float>(-MCL_BACK_OFFSET_X) * INCH_TO_M,
     MCL_BACK_FACING};
 
 // ── MCL Distance Sensor Fusion Controls ─────────────────────────────────────
@@ -144,7 +175,7 @@ constexpr double START_POSE_THETA_DEG = 0.0;
 constexpr bool START_POSE_KNOWN = false;
 
 constexpr StartupPoseMode STARTUP_POSE_MODE =
-    StartupPoseMode::GPSXYPlusIMUHeading;
+    StartupPoseMode::FullGPSInit;
 
 // GPS readiness gate used at boot
 constexpr uint32_t STARTUP_GPS_MAX_WAIT_MS      = 8000;

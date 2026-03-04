@@ -34,6 +34,8 @@ Drivetrain::Drivetrain()
         m_horizontalTracking->set_reversed(CONFIG::HORIZONTAL_TRACKING_REVERSED);
         m_horizontalTracking->reset_position();
     }
+
+    syncOdometryState();
 }
 
 // ── Periodic ────────────────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ void Drivetrain::updateOdometry() {
 
     float dFwd = fwd - m_prevForwardDist;
     float dLat = lat - m_prevLateralDist;
-    float dTheta = heading - m_prevHeading;
+    float dTheta = CONFIG::wrapAngleRadians(heading - m_prevHeading);
 
     m_prevForwardDist = fwd;
     m_prevLateralDist = lat;
@@ -117,16 +119,28 @@ void Drivetrain::updateOdometry() {
     m_pose.z()  = heading;
 }
 
-Eigen::Vector3f Drivetrain::getPose() const { return m_pose; }
+Eigen::Vector3f Drivetrain::getOdomPose() const { return m_pose; }
 
-void Drivetrain::setPose(const Eigen::Vector3f& pose) { m_pose = pose; }
+Eigen::Vector3f Drivetrain::getPose() const { return getOdomPose(); }
+
+void Drivetrain::setOdomPose(const Eigen::Vector3f& pose) {
+    m_pose = pose;
+    m_prevHeading = pose.z();
+    m_prevForwardDist = rawForwardDistance();
+    m_prevLateralDist = rawLateralDistance();
+}
+
+void Drivetrain::setPose(const Eigen::Vector3f& pose) { setOdomPose(pose); }
 
 float Drivetrain::getHeading() const {
-    return m_imu.get_heading() * static_cast<float>(M_PI) / 180.0f;
+    return CONFIG::compassDegToMathRad(static_cast<float>(m_imu.get_heading()));
 }
 
 void Drivetrain::resetHeading(float heading) {
-    m_imu.set_heading(heading * 180.0f / static_cast<float>(M_PI));
+    m_imu.set_heading(CONFIG::mathRadToCompassDeg(heading));
+    syncOdometryState();
+    m_prevHeading = heading;
+    m_pose.z() = heading;
 }
 
 Eigen::Vector2f Drivetrain::getDisplacement() {
@@ -152,6 +166,11 @@ void Drivetrain::resetEncoders() {
     if (m_horizontalTracking) m_horizontalTracking->reset_position();
     m_left.tare_position();
     m_right.tare_position();
-    m_prevForwardDist = 0.0f;
-    m_prevLateralDist = 0.0f;
+    syncOdometryState();
+}
+
+void Drivetrain::syncOdometryState() {
+    m_prevForwardDist = rawForwardDistance();
+    m_prevLateralDist = rawLateralDistance();
+    m_prevHeading = getHeading();
 }

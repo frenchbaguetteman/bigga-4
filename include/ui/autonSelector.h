@@ -50,6 +50,12 @@ public:
     static void render(const Eigen::Vector3f& pose,
                        const std::string& status = "");
 
+    /// Render a startup/init screen with a loading bar.
+    /// @param progress 0.0–1.0
+    /// @param status   optional one-line status message
+    static void renderInit(float progress,
+                           const std::string& status = "");
+
 private:
     static inline const std::vector<Auton> s_autonList = {
         Auton::NEGATIVE_1,

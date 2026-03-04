@@ -73,15 +73,21 @@ public:
         QAngle heading = m_angleFunction();
         if (!std::isfinite(heading.getValue())) return m_prediction;
 
-        // --- 1. Prediction: propagate each particle ---
+        // --- 1. Prediction: sample odometry once and propagate all particles ---
+        Eigen::Vector2f delta = m_predictionFunction();
+        float motionNoise = CONFIG::DRIVE_NOISE;
+        if constexpr (CONFIG::VERTICAL_TRACKING_PORT == 0) {
+            motionNoise *= static_cast<float>(CONFIG::MCL_DRIVE_ENCODER_FALLBACK_NOISE_SCALE);
+        }
+        std::normal_distribution<float> translationNoise(0.0f, motionNoise);
+
         for (size_t i = 0; i < L; ++i) {
-            Eigen::Vector2f delta = m_predictionFunction();
-            m_particles[i] += delta;
+            m_particles[i] += delta + Eigen::Vector2f(
+                translationNoise(m_rng), translationNoise(m_rng));
         }
 
         // Accumulate distance for rate limiting
-        Eigen::Vector2f deltaMean = m_predictionFunction();
-        m_distanceSinceUpdate += deltaMean.norm();
+        m_distanceSinceUpdate += delta.norm();
 
         // --- 2. Rate-limit check ---
         uint32_t now = pros::millis();
