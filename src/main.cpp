@@ -112,6 +112,7 @@ void update_loop() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 void screen_update_loop() {
+    Eigen::Vector3f lastFiniteCombined(0.0f, 0.0f, 0.0f);
     while (true) {
         BrainScreen::RuntimeViewModel vm;
 
@@ -121,10 +122,26 @@ void screen_update_loop() {
 
         vm.pureOdomPose = drivetrain ? drivetrain->getOdomPose()
                                      : Eigen::Vector3f(0, 0, 0);
+        if (!LocMath::isFinitePose(vm.pureOdomPose)) {
+            std::printf("[LOC] non-finite pureOdomPose, forcing zero\n");
+            vm.pureOdomPose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        }
+
         vm.pureMclPose = particleFilter ? particleFilter->getPrediction()
                                         : vm.pureOdomPose;
+        if (!LocMath::isFinitePose(vm.pureMclPose)) {
+            std::printf("[LOC] non-finite pureMclPose, fallback to odom\n");
+            vm.pureMclPose = vm.pureOdomPose;
+        }
 
         vm.combinedPose = poseSource ? poseSource() : vm.pureMclPose;
+        if (!LocMath::isFinitePose(vm.combinedPose)) {
+            std::printf("[LOC] non-finite combinedPose, fallback to last finite\n");
+            vm.combinedPose = lastFiniteCombined;
+        }
+        if (LocMath::isFinitePose(vm.combinedPose)) {
+            lastFiniteCombined = vm.combinedPose;
+        }
         vm.pose = vm.combinedPose;
 
         if (uiGps) {

@@ -9,6 +9,7 @@
 #include "config.h"
 #include "utils/utils.h"
 #include "utils/motor.h"
+#include "utils/localization_math.h"
 #include <cmath>
 
 namespace {
@@ -109,6 +110,14 @@ void Drivetrain::updateOdometry() {
     float lat = rawLateralDistance();
     float heading = getHeading();
 
+    if (!LocMath::isFinite(fwd) || !LocMath::isFinite(lat) || !LocMath::isFinite(heading) ||
+        !LocMath::isFinite(m_prevForwardDist) || !LocMath::isFinite(m_prevLateralDist) ||
+        !LocMath::isFinite(m_prevHeading)) {
+        std::printf("[ODOM] non-finite sensor/baseline, skipping tick\n");
+        syncOdometryState();
+        return;
+    }
+
     float dFwd = fwd - m_prevForwardDist;
     float dLat = lat - m_prevLateralDist;
     float dTheta = normalizeAngleRad(heading - m_prevHeading);
@@ -140,20 +149,30 @@ Eigen::Vector3f Drivetrain::getOdomPose() const { return m_pose; }
 Eigen::Vector3f Drivetrain::getPose() const { return getOdomPose(); }
 
 void Drivetrain::setOdomPose(const Eigen::Vector3f& pose) {
-    m_pose = pose;
+    if (!LocMath::isFinitePose(pose)) {
+        std::printf("[ODOM] setOdomPose non-finite, forcing origin\n");
+        m_pose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+    } else {
+        m_pose = pose;
+    }
     syncOdometryState();
-    m_prevHeading = pose.z();
+    m_prevHeading = m_pose.z();
 }
 
 void Drivetrain::syncLocalizationReference(const Eigen::Vector3f& pose) {
+    Eigen::Vector3f safePose = LocMath::isFinitePose(pose)
+        ? pose : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+    if (!LocMath::isFinitePose(pose)) {
+        std::printf("[ODOM] syncLocalizationReference non-finite input, forcing origin\n");
+    }
     // 1. IMU heading
-    m_imu.set_heading(CONFIG::mathRadToCompassDeg(pose.z()));
+    m_imu.set_heading(CONFIG::mathRadToCompassDeg(safePose.z()));
     // 2. Odom pose
-    m_pose = pose;
+    m_pose = safePose;
     // 3. Zero encoder baselines
     resetEncoders();
     // 4. Explicit heading baseline (avoids IMU read-back lag)
-    syncOdomBaselinesToCurrentSensors(pose.z());
+    syncOdomBaselinesToCurrentSensors(safePose.z());
     // 5. Clear pending displacement
     m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
 }
@@ -161,7 +180,20 @@ void Drivetrain::syncLocalizationReference(const Eigen::Vector3f& pose) {
 void Drivetrain::setPose(const Eigen::Vector3f& pose) { setOdomPose(pose); }
 
 float Drivetrain::getHeading() const {
-    return CONFIG::compassDegToMathRad(static_cast<float>(m_imu.get_heading()));
+    const float rawHeadingDeg = static_cast<float>(m_imu.get_heading());
+    if (!LocMath::isFinite(rawHeadingDeg)) {
+        if (LocMath::isFinite(m_prevHeading)) return m_prevHeading;
+        if (LocMath::isFinite(m_pose.z())) return m_pose.z();
+        return 0.0f;
+    }
+
+    const float h = CONFIG::compassDegToMathRad(rawHeadingDeg);
+    if (!LocMath::isFinite(h)) {
+        if (LocMath::isFinite(m_prevHeading)) return m_prevHeading;
+        if (LocMath::isFinite(m_pose.z())) return m_pose.z();
+        return 0.0f;
+    }
+    return h;
 }
 
 void Drivetrain::resetHeading(float heading) {
@@ -174,6 +206,10 @@ void Drivetrain::resetHeading(float heading) {
 Eigen::Vector2f Drivetrain::getDisplacement() {
     // Return displacement accumulated by updateOdometry() since last call
     Eigen::Vector2f d = m_pendingDisplacement;
+    if (!LocMath::isFiniteVec2(d)) {
+        std::printf("[ODOM] non-finite pending displacement, zeroing\n");
+        d = Eigen::Vector2f(0.0f, 0.0f);
+    }
     m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
     return d;
 }
@@ -191,9 +227,13 @@ void Drivetrain::resetEncoders() {
 }
 
 void Drivetrain::syncOdometryState() {
-    m_prevForwardDist = rawForwardDistance();
-    m_prevLateralDist = rawLateralDistance();
-    m_prevHeading = getHeading();
+    float fwd = rawForwardDistance();
+    float lat = rawLateralDistance();
+    float h = getHeading();
+
+    m_prevForwardDist = LocMath::isFinite(fwd) ? fwd : 0.0f;
+    m_prevLateralDist = LocMath::isFinite(lat) ? lat : 0.0f;
+    m_prevHeading = LocMath::isFinite(h) ? h : 0.0f;
 }
 
 void Drivetrain::syncOdomBaselinesToCurrentSensors(float heading) {
