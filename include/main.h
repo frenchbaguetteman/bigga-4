@@ -1,0 +1,95 @@
+/**
+ * @file main.h
+ * 2654E Echo — master include header.
+ *
+ * \copyright Copyright (c) 2017-2024, Purdue University ACM SIGBots.
+ */
+#ifndef _PROS_MAIN_H_
+#define _PROS_MAIN_H_
+
+#define PROS_USE_SIMPLE_NAMES
+#define PROS_USE_LITERALS
+
+#include "api.h"
+
+// ── Project headers ─────────────────────────────────────────────────────────
+#include "Eigen/Dense"
+#include "units/units.hpp"
+#include "utils/utils.h"
+#include "utils/linear.h"
+#include "utils/motor.h"
+#include "json/json.h"
+#include "telemetry/telemetry.h"
+#include "config.h"
+#include "auton.h"
+
+// Command framework
+#include "command/command.h"
+#include "command/subsystem.h"
+#include "command/commandScheduler.h"
+#include "command/commandGroup.h"
+#include "command/waitCommand.h"
+#include "command/instantCommand.h"
+#include "command/functionalCommand.h"
+#include "command/trigger.h"
+
+// Feedback
+#include "feedback/feedback.h"
+#include "feedback/pid.h"
+
+// Velocity profiles
+#include "velocityProfile/trapezoidalVelocityProfile.hpp"
+#include "velocityProfile/trapProfile.h"
+
+// Motion profiling
+#include "motionProfiling/path.h"
+#include "motionProfiling/bezier.h"
+#include "motionProfiling/motionProfile.h"
+#include "motionProfiling/pathCommand.h"
+
+// Localization
+#include "localization/sensor.h"
+#include "localization/distance.h"
+#include "localization/gps.h"
+#include "localization/line.h"
+#include "localization/particleFilter.h"
+
+// Subsystems
+#include "subsystems/drivetrain.h"
+#include "subsystems/intakes.h"
+#include "subsystems/lift.h"
+#include "subsystems/solenoids.h"
+
+// Robot commands
+#include "commands/ramsete.h"
+#include "commands/ltvUnicycleController.h"
+#include "commands/driveMove.h"
+#include "commands/rotate.h"
+#include "commands/intake/intakeCommand.h"
+#include "commands/lift/liftCommand.h"
+
+// UI
+#include "ui/autonSelector.h"
+
+// Autonomous
+#include "autonomous/autons.h"
+#include "autonomous/sharedCommands.h"
+#include "autonomous/negativeAutons.h"
+#include "autonomous/positiveAutons.h"
+#include "autonomous/skillsAuton.h"
+#include "autonomous/autonCommands.h"
+
+// ── Competition entrypoints ─────────────────────────────────────────────────
+#ifdef __cplusplus
+extern "C" {
+#endif
+void autonomous(void);
+void initialize(void);
+void disabled(void);
+void competition_initialize(void);
+void opcontrol(void);
+#ifdef __cplusplus
+}
+#endif
+
+#endif // _PROS_MAIN_H_

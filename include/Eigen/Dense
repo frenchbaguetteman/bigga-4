@@ -1,0 +1,7 @@
+/**
+ * Convenience header — includes Core + Geometry.
+ */
+#pragma once
+
+#include "Core"
+#include "Geometry"

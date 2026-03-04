@@ -1,0 +1,41 @@
+/**
+ * Minimal Eigen Geometry module — provides Rotation2D.
+ */
+#pragma once
+
+#include "Core"
+
+namespace Eigen {
+
+template <typename Scalar>
+class Rotation2D {
+    Scalar m_angle;
+
+public:
+    explicit Rotation2D(Scalar angle) : m_angle(angle) {}
+
+    Scalar angle() const { return m_angle; }
+
+    Vector<Scalar, 2> operator*(const Vector<Scalar, 2>& v) const {
+        Scalar c = std::cos(m_angle);
+        Scalar s = std::sin(m_angle);
+        return Vector<Scalar, 2>(c * v.x() - s * v.y(),
+                                  s * v.x() + c * v.y());
+    }
+
+    Matrix<Scalar, 2, 2> toRotationMatrix() const {
+        Matrix<Scalar, 2, 2> m;
+        Scalar c = std::cos(m_angle);
+        Scalar s = std::sin(m_angle);
+        m(0, 0) = c;  m(0, 1) = -s;
+        m(1, 0) = s;  m(1, 1) = c;
+        return m;
+    }
+
+    Rotation2D inverse() const { return Rotation2D(-m_angle); }
+};
+
+using Rotation2Df = Rotation2D<float>;
+using Rotation2Dd = Rotation2D<double>;
+
+} // namespace Eigen

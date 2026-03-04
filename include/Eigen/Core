@@ -1,0 +1,259 @@
+/**
+ * Minimal Eigen-compatible linear algebra library.
+ * Provides Vector2f, Vector3f, Matrix types used throughout the project.
+ * Drop-in replacement: swap with vendored Eigen 3.4.x for full functionality.
+ */
+#pragma once
+
+#include <cmath>
+#include <cstring>
+#include <algorithm>
+#include <initializer_list>
+
+namespace Eigen {
+
+// ── Vector ──────────────────────────────────────────────────────────────────
+
+template <typename Scalar, int Size>
+class Vector {
+    Scalar m_data[Size];
+
+public:
+    Vector() {
+        for (int i = 0; i < Size; ++i) m_data[i] = Scalar(0);
+    }
+
+    // Construct from scalars: Vector3f(x, y, z)
+    Vector(Scalar a, Scalar b) {
+        static_assert(Size == 2, "Two-arg constructor is for 2D vectors");
+        m_data[0] = a;
+        m_data[1] = b;
+    }
+    Vector(Scalar a, Scalar b, Scalar c) {
+        static_assert(Size == 3, "Three-arg constructor is for 3D vectors");
+        m_data[0] = a;
+        m_data[1] = b;
+        m_data[2] = c;
+    }
+
+    // Element access
+    Scalar& operator()(int i) { return m_data[i]; }
+    const Scalar& operator()(int i) const { return m_data[i]; }
+    Scalar& operator[](int i) { return m_data[i]; }
+    const Scalar& operator[](int i) const { return m_data[i]; }
+
+    Scalar& x() { return m_data[0]; }
+    Scalar  x() const { return m_data[0]; }
+    Scalar& y() { return m_data[1]; }
+    Scalar  y() const { return m_data[1]; }
+    Scalar& z() { return m_data[2]; }
+    Scalar  z() const { return m_data[2]; }
+
+    // Arithmetic operators
+    Vector operator+(const Vector& o) const {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = m_data[i] + o.m_data[i];
+        return r;
+    }
+    Vector operator-(const Vector& o) const {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = m_data[i] - o.m_data[i];
+        return r;
+    }
+    Vector operator-() const {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = -m_data[i];
+        return r;
+    }
+    Vector operator*(Scalar s) const {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = m_data[i] * s;
+        return r;
+    }
+    Vector operator/(Scalar s) const {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = m_data[i] / s;
+        return r;
+    }
+
+    Vector& operator+=(const Vector& o) {
+        for (int i = 0; i < Size; ++i) m_data[i] += o.m_data[i];
+        return *this;
+    }
+    Vector& operator-=(const Vector& o) {
+        for (int i = 0; i < Size; ++i) m_data[i] -= o.m_data[i];
+        return *this;
+    }
+    Vector& operator*=(Scalar s) {
+        for (int i = 0; i < Size; ++i) m_data[i] *= s;
+        return *this;
+    }
+    Vector& operator/=(Scalar s) {
+        for (int i = 0; i < Size; ++i) m_data[i] /= s;
+        return *this;
+    }
+
+    friend Vector operator*(Scalar s, const Vector& v) { return v * s; }
+
+    // Products and norms
+    Scalar dot(const Vector& o) const {
+        Scalar r = 0;
+        for (int i = 0; i < Size; ++i) r += m_data[i] * o.m_data[i];
+        return r;
+    }
+    Scalar squaredNorm() const { return dot(*this); }
+    Scalar norm() const { return std::sqrt(squaredNorm()); }
+    Vector normalized() const { Scalar n = norm(); return (n > Scalar(1e-12)) ? (*this / n) : *this; }
+    void normalize() { *this = normalized(); }
+
+    // head<N>(): extract first N elements
+    template <int N>
+    Vector<Scalar, N> head() const {
+        Vector<Scalar, N> r;
+        for (int i = 0; i < N; ++i) r(i) = m_data[i];
+        return r;
+    }
+
+    // tail<N>(): extract last N elements
+    template <int N>
+    Vector<Scalar, N> tail() const {
+        Vector<Scalar, N> r;
+        for (int i = 0; i < N; ++i) r(i) = m_data[Size - N + i];
+        return r;
+    }
+
+    // Utilities
+    static constexpr int size() { return Size; }
+    Scalar* data() { return m_data; }
+    const Scalar* data() const { return m_data; }
+    void setZero() { for (int i = 0; i < Size; ++i) m_data[i] = Scalar(0); }
+
+    static Vector Zero() { return Vector(); }
+    static Vector Ones() {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = Scalar(1);
+        return r;
+    }
+    static Vector Constant(Scalar val) {
+        Vector r;
+        for (int i = 0; i < Size; ++i) r.m_data[i] = val;
+        return r;
+    }
+};
+
+// ── Matrix ──────────────────────────────────────────────────────────────────
+
+template <typename Scalar, int Rows, int Cols>
+class Matrix {
+    Scalar m_data[Rows][Cols];
+
+public:
+    Matrix() {
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < Cols; ++j)
+                m_data[i][j] = Scalar(0);
+    }
+
+    Scalar& operator()(int r, int c) { return m_data[r][c]; }
+    const Scalar& operator()(int r, int c) const { return m_data[r][c]; }
+
+    static Matrix Identity() {
+        Matrix m;
+        for (int i = 0; i < std::min(Rows, Cols); ++i)
+            m.m_data[i][i] = Scalar(1);
+        return m;
+    }
+    static Matrix Zero() { return Matrix(); }
+
+    // Matrix-vector multiply
+    Vector<Scalar, Rows> operator*(const Vector<Scalar, Cols>& v) const {
+        Vector<Scalar, Rows> r;
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < Cols; ++j)
+                r(i) += m_data[i][j] * v(j);
+        return r;
+    }
+
+    // Matrix-matrix multiply
+    template <int OtherCols>
+    Matrix<Scalar, Rows, OtherCols> operator*(const Matrix<Scalar, Cols, OtherCols>& o) const {
+        Matrix<Scalar, Rows, OtherCols> r;
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < OtherCols; ++j)
+                for (int k = 0; k < Cols; ++k)
+                    r(i, j) += m_data[i][k] * o(k, j);
+        return r;
+    }
+
+    Matrix operator+(const Matrix& o) const {
+        Matrix r;
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < Cols; ++j)
+                r(i, j) = m_data[i][j] + o.m_data[i][j];
+        return r;
+    }
+    Matrix operator-(const Matrix& o) const {
+        Matrix r;
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < Cols; ++j)
+                r(i, j) = m_data[i][j] - o.m_data[i][j];
+        return r;
+    }
+    Matrix operator*(Scalar s) const {
+        Matrix r;
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < Cols; ++j)
+                r(i, j) = m_data[i][j] * s;
+        return r;
+    }
+    friend Matrix operator*(Scalar s, const Matrix& m) { return m * s; }
+
+    Matrix<Scalar, Cols, Rows> transpose() const {
+        Matrix<Scalar, Cols, Rows> r;
+        for (int i = 0; i < Rows; ++i)
+            for (int j = 0; j < Cols; ++j)
+                r(j, i) = m_data[i][j];
+        return r;
+    }
+
+    // 3x3 inverse via cofactor / determinant
+    Matrix inverse() const {
+        static_assert(Rows == 3 && Cols == 3, "Only 3x3 inverse is implemented");
+        const auto& m = m_data;
+        Scalar det =
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+            m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+            m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+
+        Scalar inv_det = Scalar(1) / det;
+        Matrix r;
+        r(0, 0) = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * inv_det;
+        r(0, 1) = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * inv_det;
+        r(0, 2) = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv_det;
+        r(1, 0) = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * inv_det;
+        r(1, 1) = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv_det;
+        r(1, 2) = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * inv_det;
+        r(2, 0) = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * inv_det;
+        r(2, 1) = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * inv_det;
+        r(2, 2) = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv_det;
+        return r;
+    }
+
+    static constexpr int rows() { return Rows; }
+    static constexpr int cols() { return Cols; }
+};
+
+// ── Common type aliases ─────────────────────────────────────────────────────
+
+using Vector2f = Vector<float, 2>;
+using Vector3f = Vector<float, 3>;
+using Vector4f = Vector<float, 4>;
+using Vector2d = Vector<double, 2>;
+using Vector3d = Vector<double, 3>;
+
+using Matrix2f = Matrix<float, 2, 2>;
+using Matrix3f = Matrix<float, 3, 3>;
+using Matrix2d = Matrix<double, 2, 2>;
+using Matrix3d = Matrix<double, 3, 3>;
+
+} // namespace Eigen
