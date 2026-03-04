@@ -113,6 +113,9 @@ void Drivetrain::updateOdometry() {
     float dLat = lat - m_prevLateralDist;
     float dTheta = normalizeAngleRad(heading - m_prevHeading);
 
+    // Correct lateral for tracking-wheel arc during turns
+    float dLatCorrected = dLat - CONFIG::LATERAL_WHEEL_OFFSET_M * dTheta;
+
     m_prevForwardDist = fwd;
     m_prevLateralDist = lat;
     m_prevHeading     = heading;
@@ -120,9 +123,16 @@ void Drivetrain::updateOdometry() {
     // Mid-angle for arc approximation
     float midTheta = heading - dTheta / 2.0f;
 
-    m_pose.x() += dFwd * std::cos(midTheta) - dLat * std::sin(midTheta);
-    m_pose.y() += dFwd * std::sin(midTheta) + dLat * std::cos(midTheta);
+    float dx = dFwd * std::cos(midTheta) - dLatCorrected * std::sin(midTheta);
+    float dy = dFwd * std::sin(midTheta) + dLatCorrected * std::cos(midTheta);
+
+    m_pose.x() += dx;
+    m_pose.y() += dy;
     m_pose.z()  = heading;
+
+    // Accumulate displacement for PF consumption
+    m_pendingDisplacement.x() += dx;
+    m_pendingDisplacement.y() += dy;
 }
 
 Eigen::Vector3f Drivetrain::getOdomPose() const { return m_pose; }
@@ -136,11 +146,16 @@ void Drivetrain::setOdomPose(const Eigen::Vector3f& pose) {
 }
 
 void Drivetrain::syncLocalizationReference(const Eigen::Vector3f& pose) {
+    // 1. IMU heading
     m_imu.set_heading(CONFIG::mathRadToCompassDeg(pose.z()));
+    // 2. Odom pose
     m_pose = pose;
-    syncOdometryState();
-    m_prevHeading = pose.z();
-    m_pose.z() = pose.z();
+    // 3. Zero encoder baselines
+    resetEncoders();
+    // 4. Explicit heading baseline (avoids IMU read-back lag)
+    syncOdomBaselinesToCurrentSensors(pose.z());
+    // 5. Clear pending displacement
+    m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
 }
 
 void Drivetrain::setPose(const Eigen::Vector3f& pose) { setOdomPose(pose); }
@@ -157,21 +172,10 @@ void Drivetrain::resetHeading(float heading) {
 }
 
 Eigen::Vector2f Drivetrain::getDisplacement() {
-    float fwd = rawForwardDistance();
-    float lat = rawLateralDistance();
-    float heading = getHeading();
-
-    float dFwd = fwd - m_prevForwardDist;
-    float dLat = lat - m_prevLateralDist;
-
-    // Match updateOdometry() convention: midpoint rotation during heading change.
-    float dTheta = normalizeAngleRad(heading - m_prevHeading);
-    float midTheta = heading - dTheta / 2.0f;
-
-    // Displacement in field frame (pure peek; does not mutate odom state).
-    return Eigen::Vector2f(
-        dFwd * std::cos(midTheta) - dLat * std::sin(midTheta),
-        dFwd * std::sin(midTheta) + dLat * std::cos(midTheta));
+    // Return displacement accumulated by updateOdometry() since last call
+    Eigen::Vector2f d = m_pendingDisplacement;
+    m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    return d;
 }
 
 float Drivetrain::getForwardDistance() const {
@@ -190,4 +194,10 @@ void Drivetrain::syncOdometryState() {
     m_prevForwardDist = rawForwardDistance();
     m_prevLateralDist = rawLateralDistance();
     m_prevHeading = getHeading();
+}
+
+void Drivetrain::syncOdomBaselinesToCurrentSensors(float heading) {
+    m_prevForwardDist = rawForwardDistance();
+    m_prevLateralDist = rawLateralDistance();
+    m_prevHeading = heading;
 }

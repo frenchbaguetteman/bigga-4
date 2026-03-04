@@ -1,6 +1,6 @@
 /**
  * @file config.h
- * Central configuration surface for 2654E Echo.
+ * Central configuration surface for 69580A.
  *
  * Contains all tunables: geometry, noise models, PID gains, RAMSETE / LTV
  * parameters, feedforward constants, sensor offsets, and localization config.
@@ -89,9 +89,10 @@ constexpr int IMU_PORT = 2;
 // Vertical = 0 → falls back to averaged drive motor encoders.
 // Horizontal = 0 → lateral displacement assumed zero (no phantom strafe).
 constexpr int  VERTICAL_TRACKING_PORT        = 0;
-constexpr int  HORIZONTAL_TRACKING_PORT      = 16;
+constexpr int  HORIZONTAL_TRACKING_PORT      = 0;     // disabled until LATERAL_WHEEL_OFFSET_M measured
 constexpr bool VERTICAL_TRACKING_REVERSED    = false;
 constexpr bool HORIZONTAL_TRACKING_REVERSED  = false;
+constexpr float LATERAL_WHEEL_OFFSET_M       = 0.0f;  // metres from robot centre; re-enable port when set
 
 // ── MCL Distance Sensor Ports ───────────────────────────────────────────────
 
@@ -104,51 +105,64 @@ constexpr int MCL_GPS_PORT             = 15;
 // GPS heading offset: GPS module faces backwards relative to robot forward
 constexpr double MCL_GPS_HEADING_OFFSET_DEG = 180.0;
 
+// GPS field-frame rotation (degrees).
+// Use this to compensate for GPS strip mounting orientation relative to field axes.
+// Positive = CCW, negative = CW. Example: strip appears 90° CCW -> set to -90.
+constexpr float GPS_FIELD_ROTATION_DEG = -90.0f;
+
+inline Eigen::Vector2f transformGpsToFieldFrame(const Eigen::Vector2f& rawPosM) {
+    const float a = GPS_FIELD_ROTATION_DEG * static_cast<float>(M_PI) / 180.0f;
+    const float c = std::cos(a);
+    const float s = std::sin(a);
+    return Eigen::Vector2f(
+        rawPosM.x() * c - rawPosM.y() * s,
+        rawPosM.x() * s + rawPosM.y() * c);
+}
+
 // ── MCL Sensor Mounting Offsets (inches, robot frame) ──────────────────────
-// Tuning inputs:
+// Raw tuning inputs in inches (*_IN):
 //   +offsetX = robot-right, -offsetX = robot-left
 //   +offsetY = robot-forward, -offsetY = robot-backward
 
-constexpr double MCL_LEFT_OFFSET_X   = -4.625;
-constexpr double MCL_LEFT_OFFSET_Y   =  0.25;
-constexpr double MCL_RIGHT_OFFSET_X  =  5.175;
-constexpr double MCL_RIGHT_OFFSET_Y  =  0.25;
-constexpr double MCL_BACK_OFFSET_X   =  6.1875;   // right overhang
-constexpr double MCL_BACK_OFFSET_Y   = -3.625;
-constexpr double MCL_FRONT_OFFSET_X  =  6.1875;   // right overhang
-constexpr double MCL_FRONT_OFFSET_Y  = -1.875;
-constexpr double MCL_GPS_OFFSET_X    =  6.0;
-constexpr double MCL_GPS_OFFSET_Y    = -3.75;     // 0.125" behind back distance sensor
+constexpr double MCL_LEFT_OFFSET_X_IN   = -4.625;
+constexpr double MCL_LEFT_OFFSET_Y_IN   =  0.25;
+constexpr double MCL_RIGHT_OFFSET_X_IN  =  5.175;
+constexpr double MCL_RIGHT_OFFSET_Y_IN  =  0.25;
+constexpr double MCL_BACK_OFFSET_X_IN   =  6.1875;   // right overhang
+constexpr double MCL_BACK_OFFSET_Y_IN   = -3.625;
+constexpr double MCL_FRONT_OFFSET_X_IN  =  6.1875;   // right overhang
+constexpr double MCL_FRONT_OFFSET_Y_IN  = -1.875;
+constexpr double MCL_GPS_OFFSET_X_IN    =  6.0;
+constexpr double MCL_GPS_OFFSET_Y_IN    = -3.75;     // 0.125" behind back distance sensor
 
-// Converted GPS offset in metres, math robot frame:
-//   +X = forward, +Y = left
-constexpr float MCL_GPS_OFFSET_X_M = static_cast<float>(MCL_GPS_OFFSET_Y) * IN_TO_M;
-constexpr float MCL_GPS_OFFSET_Y_M = static_cast<float>(-MCL_GPS_OFFSET_X) * IN_TO_M;
+// GPS offset in metres, math robot frame (+X forward, +Y left)
+constexpr float MCL_GPS_OFFSET_X_M = static_cast<float>(MCL_GPS_OFFSET_Y_IN) * IN_TO_M;
+constexpr float MCL_GPS_OFFSET_Y_M = static_cast<float>(-MCL_GPS_OFFSET_X_IN) * IN_TO_M;
 inline const Eigen::Vector2f GPS_OFFSET_M{MCL_GPS_OFFSET_X_M, MCL_GPS_OFFSET_Y_M};
 
 // Sensor facing angles (radians, math robot frame: +CCW)
-constexpr float MCL_LEFT_FACING  = static_cast<float>( M_PI / 2.0);  // +90°
-constexpr float MCL_RIGHT_FACING = static_cast<float>(-M_PI / 2.0);  // -90°
-constexpr float MCL_BACK_FACING  = static_cast<float>( M_PI);         // 180°
-constexpr float MCL_FRONT_FACING = 0.0f;                               //   0°
+constexpr float MCL_LEFT_FACING_RAD  = static_cast<float>( M_PI / 2.0);  // +90°
+constexpr float MCL_RIGHT_FACING_RAD = static_cast<float>(-M_PI / 2.0);  // -90°
+constexpr float MCL_BACK_FACING_RAD  = static_cast<float>( M_PI);         // 180°
+constexpr float MCL_FRONT_FACING_RAD = 0.0f;                               //   0°
 
 // Distance-sensor offsets in metres, math robot frame (+X fwd, +Y left)
-inline const Eigen::Vector3f DIST_LEFT_OFFSET {
-    static_cast<float>(MCL_LEFT_OFFSET_Y) * IN_TO_M,
-    static_cast<float>(-MCL_LEFT_OFFSET_X) * IN_TO_M,
-    MCL_LEFT_FACING};
-inline const Eigen::Vector3f DIST_RIGHT_OFFSET{
-    static_cast<float>(MCL_RIGHT_OFFSET_Y) * IN_TO_M,
-    static_cast<float>(-MCL_RIGHT_OFFSET_X) * IN_TO_M,
-    MCL_RIGHT_FACING};
-inline const Eigen::Vector3f DIST_FRONT_OFFSET{
-    static_cast<float>(MCL_FRONT_OFFSET_Y) * IN_TO_M,
-    static_cast<float>(-MCL_FRONT_OFFSET_X) * IN_TO_M,
-    MCL_FRONT_FACING};
-inline const Eigen::Vector3f DIST_BACK_OFFSET {
-    static_cast<float>(MCL_BACK_OFFSET_Y) * IN_TO_M,
-    static_cast<float>(-MCL_BACK_OFFSET_X) * IN_TO_M,
-    MCL_BACK_FACING};
+inline const Eigen::Vector3f DIST_LEFT_OFFSET_M {
+    static_cast<float>(MCL_LEFT_OFFSET_Y_IN) * IN_TO_M,
+    static_cast<float>(-MCL_LEFT_OFFSET_X_IN) * IN_TO_M,
+    MCL_LEFT_FACING_RAD};
+inline const Eigen::Vector3f DIST_RIGHT_OFFSET_M{
+    static_cast<float>(MCL_RIGHT_OFFSET_Y_IN) * IN_TO_M,
+    static_cast<float>(-MCL_RIGHT_OFFSET_X_IN) * IN_TO_M,
+    MCL_RIGHT_FACING_RAD};
+inline const Eigen::Vector3f DIST_FRONT_OFFSET_M{
+    static_cast<float>(MCL_FRONT_OFFSET_Y_IN) * IN_TO_M,
+    static_cast<float>(-MCL_FRONT_OFFSET_X_IN) * IN_TO_M,
+    MCL_FRONT_FACING_RAD};
+inline const Eigen::Vector3f DIST_BACK_OFFSET_M {
+    static_cast<float>(MCL_BACK_OFFSET_Y_IN) * IN_TO_M,
+    static_cast<float>(-MCL_BACK_OFFSET_X_IN) * IN_TO_M,
+    MCL_BACK_FACING_RAD};
 
 // ── MCL Distance Sensor Fusion Controls ─────────────────────────────────────
 

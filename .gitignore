@@ -1,2 +1,10 @@
 .d/
+bin/
+.cache/
+
+# Generated metadata
+compile_commands.json
+
+# Local editor/project state
+.vscode/
 .DS_Store

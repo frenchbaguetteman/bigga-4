@@ -13,6 +13,7 @@
 #include "localization/sensor.h"
 #include "Eigen/Dense"
 #include "config.h"
+#include "utils/localization_math.h"
 #include "pros/distance.hpp"
 #include <cmath>
 #include <algorithm>
@@ -38,12 +39,12 @@ public:
 
     std::optional<float> p(const Eigen::Vector3f& particle) override {
         if (!m_reading) return std::nullopt;
+        if (!LocMath::isFinitePose(particle)) return std::nullopt;
 
         float expected = expectedDistance(particle);
-        if (expected <= 0.0f) return std::nullopt;
+        if (!LocMath::isFinite(expected) || expected <= 0.0f) return std::nullopt;
 
         float diff = *m_reading - expected;
-        // Gaussian likelihood scaled by sensor weight
         float exponent = -(diff * diff) / (2.0f * m_stddev * m_stddev);
         float likelihood = std::exp(exponent);
         // Blend towards uniform (1.0) based on weight: lower weight → less influence

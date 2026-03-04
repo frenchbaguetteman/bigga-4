@@ -1,4 +1,4 @@
-# 2654E Echo — User Guide
+# 69580A — User Guide
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@
 
 ## Overview
 
-**2654E Echo** is a command-based PROS V5 robot framework that provides:
+**69580A** is a command-based PROS V5 robot framework that provides:
 
 - **Command framework** — schedule commands that own subsystems, compose them
   sequentially / in parallel, and bind them to controller triggers.
@@ -212,7 +212,7 @@ Available routines:
 ### Screen Layout
 
 ```
-Line 0:  2654E Echo
+Line 0:  69580A
 Line 1:  << Negative 1 >>
 Line 2:  Alliance: RED
 Line 3:
@@ -395,4 +395,4 @@ make clean && make
 
 ---
 
-*2654E Echo — Team 2654E, 2025–2026 season.*
+*69580A — Team 69580A, 2025–2026 season.*

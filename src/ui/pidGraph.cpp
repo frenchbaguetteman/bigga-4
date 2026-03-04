@@ -30,6 +30,8 @@ void init() {
 }
 
 void addSample(double error, double output) {
+    if (!std::isfinite(error)) error = 0.0;
+    if (!std::isfinite(output)) output = 0.0;
     errorBuf[head] = error;
     outputBuf[head] = output;
     head = (head + 1) % MAX_SAMPLES;
@@ -51,7 +53,7 @@ void draw(int x0, int y0, int x1, int y1) {
 
     if (count == 0) {
         pros::screen::set_pen(LABEL);
-        pros::screen::print(pros::E_TEXT_SMALL, x0 + 8, y0 + 8, "No PID data");
+        pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 8, y0 + 8, "No PID data");
         return;
     }
 
@@ -71,7 +73,12 @@ void draw(int x0, int y0, int x1, int y1) {
         return std::max(y0 + 1, std::min(y1 - 1, py));
     };
 
-    int visible = std::min(count, w - 2);
+    int visible = std::max(0, std::min(count, w - 2));
+    if (visible < 2) {
+        pros::screen::set_pen(LABEL);
+        pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 8, y0 + 8, "PID graph warming up");
+        return;
+    }
 
     pros::screen::set_pen(ERR_COL);
     for (int i = 0; i < visible - 1; ++i) {
@@ -90,11 +97,11 @@ void draw(int x0, int y0, int x1, int y1) {
     }
 
     pros::screen::set_pen(ERR_COL);
-    pros::screen::print(pros::E_TEXT_SMALL, x0 + 4, y0 + 2, "Err");
+    pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 4, y0 + 2, "Err");
     pros::screen::set_pen(OUT_COL);
-    pros::screen::print(pros::E_TEXT_SMALL, x0 + 34, y0 + 2, "Out");
+    pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 48, y0 + 2, "Out");
     pros::screen::set_pen(TXT);
-    pros::screen::print(pros::E_TEXT_SMALL, x0 + 68, y0 + 2, "Scale %.1f", maxVal);
+    pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 94, y0 + 2, "Scale %.1f", maxVal);
 }
 
 }  // namespace PIDGraphUI

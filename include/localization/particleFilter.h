@@ -19,6 +19,7 @@
 #include "Eigen/Dense"
 #include "localization/sensor.h"
 #include "config.h"
+#include "utils/localization_math.h"
 #include "pros/rtos.hpp"
 
 #include <vector>
@@ -207,6 +208,15 @@ private:
     std::mt19937 m_rng{42};
 
     // ── Helpers ─────────────────────────────────────────────────────────
+
+    /// Assert m_prediction is finite; reset to origin if corrupted.
+    Eigen::Vector3f validatePose() {
+        if (LocMath::isFinitePose(m_prediction)) return m_prediction;
+        std::printf("[PF] ASSERT: non-finite pose (%f,%f,%f) — reset\n",
+                    m_prediction.x(), m_prediction.y(), m_prediction.z());
+        m_prediction = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        return m_prediction;
+    }
 
     Eigen::Vector3f computeMean(float heading) const {
         Eigen::Vector2f sum(0.0f, 0.0f);

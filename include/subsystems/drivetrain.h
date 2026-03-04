@@ -63,6 +63,12 @@ public:
      */
     void syncLocalizationReference(const Eigen::Vector3f& pose);
 
+    /**
+     * Set odom baselines from current sensor values with an explicit heading.
+     * Use at startup so the first delta from the chosen pose is zero.
+     */
+    void syncOdomBaselinesToCurrentSensors(float heading);
+
     /** Backward-compatible alias for setOdomPose(). */
     void setPose(const Eigen::Vector3f& pose);
 
@@ -99,6 +105,7 @@ private:
     float m_prevForwardDist = 0.0f;
     float m_prevLateralDist = 0.0f;
     float m_prevHeading     = 0.0f;
+    Eigen::Vector2f m_pendingDisplacement{0.0f, 0.0f};
     DriveSpeeds m_lastSpeeds{};
 
     // Internal helpers

@@ -3,7 +3,7 @@
  * Brain-screen autonomous selector using LLEMU (3-button LCD).
  *
  * Layout:
- *   Line 0:  "2654E Echo"
+ *   Line 0:  "69580A"
  *   Line 1:  "<< AUTON_NAME >>"
  *   Line 2:  "Alliance: RED / BLUE"
  *   Line 3:  (blank or status)

@@ -34,7 +34,7 @@ void renderInit(const InitViewModel& vm) {
     pros::screen::draw_rect(24, 40, 455, 200);
 
     pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_LARGE, 150, 58, "2654E Echo");
+    pros::screen::print(pros::E_TEXT_LARGE, 150, 58, "69580A");
     pros::screen::print(pros::E_TEXT_MEDIUM, 56, 92, "%s", vm.stageTitle.c_str());
 
     int barX0 = 56;
@@ -50,8 +50,8 @@ void renderInit(const InitViewModel& vm) {
     pros::screen::set_pen(0x00FFFFFF);
     pros::screen::draw_rect(barX0, barY0, barX1, barY1);
 
-    pros::screen::print(pros::E_TEXT_SMALL, 56, 156, "%s", vm.detail.c_str());
-    pros::screen::print(pros::E_TEXT_SMALL, 394, 156, "%d%%", pct);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 56, 154, "%s", vm.detail.c_str());
+    pros::screen::print(pros::E_TEXT_MEDIUM, 390, 154, "%d%%", pct);
 }
 
 void renderRuntime(const RuntimeViewModel& vm) {
