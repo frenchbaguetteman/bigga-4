@@ -287,6 +287,10 @@ constexpr float MAX_DISTANCE_SINCE_UPDATE = 0.05f;     // metres
 constexpr int   MAX_UPDATE_INTERVAL_MS    = 400;       // milliseconds (less idle jitter)
 constexpr float PF_STATIONARY_DEADBAND_M  = 0.003f;    // ignore encoder creep below 3 mm/update
 
+// Particle-filter robustness (anti-impoverishment / kidnapped-robot recovery)
+constexpr float PF_RESAMPLE_JITTER_SCALE      = 0.50f;  // jitter stddev = DRIVE_NOISE * scale
+constexpr float PF_RANDOM_INJECTION_FRACTION  = 0.02f;  // 2% random particles after resample
+
 // ── Speed / acceleration limits ─────────────────────────────────────────────
 
 constexpr float MAX_SPEED        = 1.8f;   // m/s empirical top speed

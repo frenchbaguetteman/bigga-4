@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <optional>
 #include <algorithm>
+#include <string>
 
 class ParticleFilter {
 public:
@@ -73,7 +74,7 @@ public:
     Eigen::Vector3f update() {
         // Guard: if heading source is invalid, return last prediction
         QAngle heading = m_angleFunction();
-        if (!std::isfinite(heading.getValue())) return m_prediction;
+        if (!std::isfinite(heading.getValue())) return validatePose();
 
         // --- 1. Prediction: sample odometry once and propagate all particles ---
         Eigen::Vector2f delta = m_predictionFunction();
@@ -102,7 +103,7 @@ public:
         if (tooSoon && tooRecent) {
             // Cheap estimate: just return mean of current particles
             m_prediction = computeMean(heading.getValue());
-            return m_prediction;
+            return validatePose();
         }
 
         // --- 3. Sensor update ---
@@ -140,6 +141,9 @@ public:
                 w = 1.0 / static_cast<double>(L);  // minimal weight
             }
 
+            // Prevent total collapse to exact zeros
+            w = std::max(w, static_cast<double>(LocMath::LIKELIHOOD_EPS));
+
             m_weights[i] = w;
             totalWeight += w;
         }
@@ -147,7 +151,7 @@ public:
         if (totalWeight <= 0.0) {
             std::printf("Warning: Total weight equal to 0\n");
             m_prediction = computeMean(heading.getValue());
-            return m_prediction;
+            return validatePose();
         }
 
         // Normalize weights and compute ESS
@@ -190,6 +194,28 @@ public:
                 m_particles[i] = oldParticles[j];
             }
 
+            // Roughening after resampling to combat particle impoverishment
+            const float jitterStd = CONFIG::DRIVE_NOISE * CONFIG::PF_RESAMPLE_JITTER_SCALE;
+            std::normal_distribution<float> jitter(0.0f, jitterStd);
+            for (auto& p : m_particles) {
+                p.x() += jitter(m_rng);
+                p.y() += jitter(m_rng);
+            }
+
+            // Inject a small random subset for kidnapped-robot recovery
+            size_t injectCount = static_cast<size_t>(
+                std::round(static_cast<double>(L) * CONFIG::PF_RANDOM_INJECTION_FRACTION));
+            injectCount = std::min(injectCount, L);
+            for (size_t k = 0; k < injectCount; ++k) {
+                size_t idx = (k == 0) ? 0 : (m_rng() % L);
+                m_particles[idx] = randomFieldPoint();
+            }
+
+            // Keep all particles valid wrt field bounds
+            for (auto& p : m_particles) {
+                if (outOfField(p)) p = randomFieldPoint();
+            }
+
             std::fill(m_weights.begin(), m_weights.end(), 1.0 / static_cast<double>(L));
         }
 
@@ -197,7 +223,7 @@ public:
         m_lastUpdateTime = now;
         m_distanceSinceUpdate = 0.0f;
 
-        return m_prediction;
+        return validatePose();
     }
 
     // ── Accessors ───────────────────────────────────────────────────────
