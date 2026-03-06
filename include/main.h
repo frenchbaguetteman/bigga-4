@@ -31,7 +31,6 @@
 #include "command/waitCommand.h"
 #include "command/instantCommand.h"
 #include "command/functionalCommand.h"
-#include "command/trigger.h"
 
 // Feedback
 #include "feedback/feedback.h"

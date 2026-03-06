@@ -1,403 +1,373 @@
-# 69580A — User Guide
+# 69580A User Guide
 
-## Table of Contents
+This guide is the operator and team-facing overview for the current robot code in this repository. It explains what the robot does today, how to drive it, how autonomous selection works, how localization is fused, and which implementation caveats matter on competition day.
 
-1. [Overview](#overview)
-2. [Getting Started](#getting-started)
-3. [Project Structure](#project-structure)
-4. [Configuration](#configuration)
-5. [Autonomous Selector](#autonomous-selector)
-6. [Driving](#driving)
-7. [Autonomous Routines](#autonomous-routines)
-8. [Localization System](#localization-system)
-9. [Tuning Guide](#tuning-guide)
-10. [Troubleshooting](#troubleshooting)
+For deeper references, start with:
 
----
+- [docs/README.md](README.md)
+- [docs/MOTION_REFERENCE.md](MOTION_REFERENCE.md)
+- [docs/TUTORIALS.md](TUTORIALS.md)
+- [docs/API_REFERENCE.md](API_REFERENCE.md)
 
-## Overview
+## What This Codebase Runs
 
-**69580A** is a command-based PROS V5 robot framework that provides:
+The robot is a command-based PROS V5 project with these active systems:
 
-- **Command framework** — schedule commands that own subsystems, compose them
-  sequentially / in parallel, and bind them to controller triggers.
-- **Monte Carlo Localization (MCL)** — a particle filter fusing odometry, distance
-  sensors, and a VEX GPS sensor for centimetre-level field positioning.
-- **Motion profiling** — trapezoidal velocity profiles and cubic Bézier path
-  generation for smooth autonomous movement.
-- **RAMSETE & LTV path-following** — two closed-loop path-following controllers
-  that drive the robot along profiled trajectories.
-- **Brain-screen auton selector** — cycle through autonomous routines and flip
-  alliance colour using the three LCD buttons.
-- **Live pose display** — see the robot's estimated (x, y, θ) on the brain
-  screen in real time.
-- **GPS-based initialisation** — optionally read the VEX GPS at boot to seed
-  the initial robot pose, no manual measuring required.
+- 6-motor tank drivetrain with teleop arcade control
+- 2-motor intake
+- 4 pneumatic outputs: `select1`, `select2`, `tongue`, `wing`
+- IMU-based heading
+- Odometry using a horizontal tracking wheel plus drive-encoder fallback for forward distance
+- Monte Carlo localization (MCL) with GPS and four distance sensors
+- Motion-profiled autonomous paths followed with RAMSETE
+- Brain-screen UI for auton selection and localization diagnostics
 
-### Hardware Requirements
+Current non-obvious implementation facts:
 
-| Component | Quantity | Config Constant |
-|-----------|----------|-----------------|
-| V5 Motor (drive) | 6 | `LEFT_DRIVE_PORTS`, `RIGHT_DRIVE_PORTS` |
-| V5 Motor (intake) | 2 | `INTAKE_PORTS` |
-| V5 IMU | 1 | `IMU_PORT` |
-| V5 Rotation Sensor (horizontal tracking) | 1 | `HORIZONTAL_TRACKING_PORT` |
-| V5 Distance Sensor | 4 | `MCL_*_DISTANCE_PORT` |
-| V5 GPS Sensor | 1 | `MCL_GPS_PORT` |
-| 3-Wire Pneumatics | 4 | `SELECT1_PORT` … `WING_PORT` |
+- The lift is stubbed out right now. `Lift` commands compile, but the subsystem is a no-op.
+- `Negative 2` currently runs the same command graph as `Negative 1`.
+- `Positive 2` currently runs the same command graph as `Positive 1`.
+- Alliance selection is displayed in the UI, but autonomous building does not currently branch on alliance.
+- If `Skills` is selected, the skills autonomous is automatically scheduled inside `opcontrol()`.
 
----
+## Competition-Day Quick Start
 
-## Getting Started
+1. Power on the brain with the robot flat and still.
+2. Wait for IMU calibration and localization startup to finish.
+3. Confirm the controller rumbles once and the screen reaches `Ready`.
+4. On the brain screen, select the desired autonomous and alliance.
+5. Check the pose pages if localization looks suspicious.
+6. Enter autonomous or driver control.
 
-### Prerequisites
+If GPS never stabilizes during boot, the robot falls back to the configured start pose in [`include/config.h`](../include/config.h).
 
-| Tool | Version | Installation |
-|------|---------|-------------|
-| PROS CLI | ≥ 3.5 | `pip3 install pros-cli` |
-| ARM GCC | ≥ 13 (15.2 recommended) | `brew install --cask gcc-arm-embedded` |
-| VS Code + PROS extension | latest | VS Code marketplace |
+## Operator Controls
 
-### Build & Upload
+### Driver Control
 
-```bash
-# Build (use raw make — pros make has a version-detection bug)
-make clean && make
+The code in [`src/main.cpp`](../src/main.cpp) binds the master controller like this:
 
-# Upload to the brain
-pros upload
+| Control | Action | Notes |
+|---|---|---|
+| Left stick `Y` | Forward / reverse drive | Passed through joystick shaping |
+| Right stick `X` | Turn | Passed through joystick shaping |
+| `R1` held | Intake in | Runs intake at `127` |
+| `R2` held | Intake out | Runs intake at `-127` |
+| `L1` press | Toggle tongue pneumatic | Edge-triggered |
+| `L2` press | Toggle wing pneumatic | Edge-triggered |
+| `A` press | Toggle `select1` pneumatic | Edge-triggered |
+| `B` press | Toggle `select2` pneumatic | Edge-triggered |
+| Partner `Right` | Cancel running skills auton | Only when `Skills` is selected and active |
 
-# Or flash a specific slot
-pros upload --slot 2
-```
+### Driver Feel
 
-### First-Time Setup
+Teleop driving uses `Drivetrain::driverArcade()`, not raw stick passthrough. That means:
 
-1. **Wire the robot** according to the port table in `include/config.h`.
-2. **Calibrate the IMU** — power on the brain with the robot flat and still;
-   the IMU self-calibrates in ~2 seconds.
-3. **Set the GPS strip** — apply the VEX GPS field strip and verify the sensor
-   returns non-zero values.
-4. **Verify sensors** — check the brain's Devices menu to confirm every sensor
-   is detected on the correct port.
+- A joystick deadband is applied.
+- Forward and turn both use exponential response shaping.
+- When the sticks return to center, soft active braking can hold the last wheel position briefly.
 
----
+Current driver tuning values in [`include/config.h`](../include/config.h):
 
-## Project Structure
+| Constant | Value |
+|---|---|
+| `DRIVER_JOYSTICK_DEADBAND` | `5.0` |
+| `DRIVER_FORWARD_CURVE_T` | `5.0` |
+| `DRIVER_TURN_CURVE_T` | `5.0` |
+| `DRIVER_ACTIVE_BRAKE_ENABLED` | `true` |
+| `DRIVER_ACTIVE_BRAKE_POWER` | `6.0` |
+| `DRIVER_ACTIVE_BRAKE_KP` | `0.08` |
 
-```
-├── include/
-│   ├── config.h              ← all ports, PID gains, geometry, MCL config
-│   ├── main.h                ← master include
-│   ├── auton.h               ← active auton/alliance selection
-│   ├── ui/
-│   │   └── autonSelector.h   ← brain-screen selector
-│   ├── command/               ← command framework (scheduler, groups, triggers)
-│   ├── feedback/              ← PID controller
-│   ├── subsystems/            ← drivetrain, intakes, lift, solenoids
-│   ├── localization/          ← particle filter, sensor models
-│   ├── motionProfiling/       ← Bézier paths, velocity profiles
-│   ├── commands/              ← RAMSETE, LTV, drive/rotate commands
-│   ├── autonomous/            ← auton routines, shared commands
-│   └── ...                    ← Eigen, units, utils, JSON, telemetry
-├── src/
-│   ├── autonomous/            ← centralized auton definitions/builders
-│   ├── main.cpp               ← lifecycle, GPS init, scheduler tasks
-│   ├── subsystems/            ← subsystem implementations
-│   ├── motionProfiling/       ← Bézier motion profiling impl
-│   ├── command/               ← trigger implementation
-│   ├── feedback/              ← PID implementation
-│   └── ui/                    ← auton selector implementation
-├── docs/
-│   ├── USER_GUIDE.md          ← this file
-│   └── API_REFERENCE.md       ← full API docs
-└── Makefile / common.mk       ← build system
-```
+## Brain Screen
 
----
+The brain screen is a real operator tool, not just a splash page. It is implemented by [`src/ui/brainScreen.cpp`](../src/ui/brainScreen.cpp), [`src/ui/screenManager.cpp`](../src/ui/screenManager.cpp), and related UI files.
 
-## Configuration
+### Startup Screen
 
-All tunables live in **`include/config.h`** inside `namespace CONFIG`.
+During `initialize()` the screen shows:
 
-### Motor Ports
+- current init stage
+- boot progress percentage
+- GPS polling progress during localization startup
 
-```cpp
-// Negative port = reversed motor
-inline const std::vector<std::int8_t> LEFT_DRIVE_PORTS  = {-11, -13, -14};
-inline const std::vector<std::int8_t> RIGHT_DRIVE_PORTS = { 9,  17,  20};
-inline const std::vector<std::int8_t> INTAKE_PORTS      = { 3,  -5};
-```
+### Runtime Pages
 
-### Tracking Wheels
+The top bar exposes these pages:
 
-Set a tracking port to **0** to disable it:
+- `SELECT`: autonomous and alliance selection, plus live fused pose
+- `ODOM`: field map and pose cards for odom, MCL, GPS, and combined pose
+- `PID`: live position and heading delta graph
+- `PATH`: current routine summary and current fused pose
+- `GPS`: raw GPS pose and fused-vs-GPS drift
 
-| Constant | Default | Effect when 0 |
-|----------|---------|---------------|
-| `VERTICAL_TRACKING_PORT` | `0` | Falls back to averaged drive motor encoders |
-| `HORIZONTAL_TRACKING_PORT` | `16` | Lateral displacement assumed zero |
+### Selector Touch Controls
+
+On the `SELECT` page:
+
+- tap `RED` or `BLUE` to set alliance
+- tap `PREV` or `NEXT` to cycle routines
+- tap `QUICK: SKILLS` to jump to `Skills`
+
+The ordered autonomous list comes from [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp):
+
+1. `Negative 1`
+2. `Negative 2`
+3. `Positive 1`
+4. `Positive 2`
+5. `Skills`
+6. `None`
+
+## Hardware Map
+
+These values are taken from the live config in [`include/config.h`](../include/config.h).
+
+### Motors and Sensors
+
+| Hardware | Ports / channels | Notes |
+|---|---|---|
+| Left drive | `-11`, `-15`, `-14` | Negative means reversed |
+| Right drive | `18`, `17`, `20` | Blue cartridges |
+| Intake | `-6`, `8` | Linked motor group |
+| IMU | `13` | Used for heading |
+| Vertical tracking | `0` | Disabled, so forward odom falls back to drive encoders |
+| Horizontal tracking | `16` | Enabled |
+| Left distance | `2` | Facing left |
+| Right distance | `5` | Facing right |
+| Back distance | `4` | Facing back |
+| Front distance | `1` | Facing forward |
+| GPS | `3` | Used in startup and runtime fusion |
+
+### Pneumatics
+
+| Output | ADI port |
+|---|---|
+| `select1` | `A` |
+| `select2` | `B` |
+| `tongue` | `C` |
+| `wing` | `D` |
+
+## Robot Lifecycle
+
+The main competition flow lives in [`src/main.cpp`](../src/main.cpp).
+
+### `initialize()`
+
+`initialize()` performs these steps in order:
+
+1. Initializes the brain screen
+2. Applies default auton and alliance selections from [`include/auton.h`](../include/auton.h)
+3. Constructs subsystems
+4. Calibrates the IMU
+5. Builds localization sensor models
+6. Acquires a startup pose
+7. Synchronizes odometry to that pose
+8. Builds the currently selected autonomous command graph
+9. Starts the screen task and scheduler task
+
+When initialization is complete, the master controller rumbles once.
+
+### `autonomous()`
+
+`autonomous()` rebuilds the auton command from the current selector state, then schedules it.
+
+### `opcontrol()`
+
+`opcontrol()`:
+
+- resets the command scheduler
+- cancels any leftover autonomous command
+- installs controller trigger bindings
+- runs shaped arcade drive whenever the drivetrain is not owned by another command
+
+Special case: if the selected routine is `Skills`, the auton command is scheduled immediately in driver control. This is intended for programming-skills use.
+
+## Autonomous Selection and Slot Defaults
+
+The file [`include/auton.h`](../include/auton.h) defines the default auton/alliance baked into the current build.
+
+The script [`uploadAllAutons.py`](../uploadAllAutons.py) rewrites that header repeatedly and uploads:
+
+| Slot | Default routine |
+|---|---|
+| `1` | `Negative 1` |
+| `2` | `Negative 2` |
+| `3` | `Positive 1` |
+| `4` | `Positive 2` |
+| `5` | `Skills` |
+
+After it finishes, the script restores the header to `Negative 1` / `RED`.
+
+## Localization and Pose Fusion
+
+This project intentionally separates several pose sources:
+
+- odometry-only pose from the drivetrain
+- MCL pose from the particle filter
+- GPS pose when the GPS reading is valid
+- combined pose used by autonomous controllers
+
+### Coordinate Convention
+
+Internal motion uses one canonical frame:
+
+- position in meters
+- heading in radians
+- `+X` is east / field-forward
+- `+Y` is north / field-left
+- heading positive is counterclockwise
+
+Human-entered start headings stay in VEX compass convention and are converted at the config boundary.
 
 ### Startup Pose Mode
 
-Controls how the robot's initial field pose is determined:
+Current startup mode:
 
-```cpp
-enum class StartupPoseMode {
-    ConfiguredStartPoseOnly,   // use START_POSE_X/Y/THETA from config
-    GPSXYPlusIMUHeading,       // GPS x,y + IMU heading (recommended)
-    FullGPSInit,               // GPS x,y + GPS heading
-};
+- `STARTUP_POSE_MODE = GPSXYPlusIMUHeading`
+
+That means:
+
+- startup `x` and `y` come from GPS once GPS stabilizes
+- startup heading comes from the IMU, seeded using the configured start heading
+
+If GPS does not stabilize in time, the code falls back to:
+
+- `START_POSE_X_in`
+- `START_POSE_Y_in`
+- `START_POSE_THETA_deg`
+
+### Runtime Fusion
+
+The combined pose used by path followers is built like this:
+
+- when the robot is still, bounded GPS corrections can pull odometry toward GPS
+- when the robot is moving, bounded MCL corrections can pull odometry toward the particle-filter estimate
+- heading remains the odometry/IMU heading
+
+This design keeps controller behavior smooth while still letting absolute sensors correct drift.
+
+For design rationale and regression procedures, see:
+
+- [docs/LOCALIZATION_DESIGN_RATIONALE.md](LOCALIZATION_DESIGN_RATIONALE.md)
+- [docs/LOCALIZATION_REFACTORING_SUMMARY.md](LOCALIZATION_REFACTORING_SUMMARY.md)
+- [docs/LOCALIZATION_REGRESSION_TESTS.md](LOCALIZATION_REGRESSION_TESTS.md)
+
+## Motion System Summary
+
+The robot has three main autonomous motion primitives:
+
+- `DriveMoveCommand`: point-to-point PID drive
+- `RotateCommand`: PID turn-in-place
+- `RamseteCommand`: profile follower over a `MotionProfile`
+
+The current autonomous routines are all assembled from those primitives. Detailed step-by-step motion documentation lives in [docs/MOTION_REFERENCE.md](MOTION_REFERENCE.md).
+
+## Build and Deploy
+
+### Build
+
+```bash
+make clean
+make
 ```
 
-Set the active mode with:
-```cpp
-constexpr StartupPoseMode STARTUP_POSE_MODE = StartupPoseMode::GPSXYPlusIMUHeading;
+### Upload a Single Build
+
+Use the PROS command your local setup supports. The repo automation script uses:
+
+```bash
+pros mu --slot 1 --name "Negative 1" --no-analytics
 ```
 
-`START_POSE_THETA_DEG` uses VEX compass convention for human entry:
-`0° = north`, `90° = east`, clockwise positive. The localization stack converts
-that to the internal radians frame automatically.
+### Upload All Preassigned Slots
 
-### Distance Sensor Weights
-
-Each MCL distance sensor can be weighted 0.0–1.0 to tune its influence:
-
-```cpp
-constexpr double MCL_LEFT_DISTANCE_WEIGHT   = 0.60;
-constexpr double MCL_RIGHT_DISTANCE_WEIGHT  = 0.60;
-constexpr double MCL_BACK_DISTANCE_WEIGHT   = 0.80;
-constexpr double MCL_FRONT_DISTANCE_WEIGHT  = 0.80;
+```bash
+python3 uploadAllAutons.py
 ```
 
-Lower weight = less trust in that sensor. Sensors can also be individually
-enabled/disabled with `MCL_ENABLE_*_DISTANCE_SENSOR` booleans.
+Dry run:
 
-### PID Gains
-
-```cpp
-inline PID::Gains TURN_PID      {kP, kI, kD, integralCap};
-inline PID::Gains DISTANCE_PID  {kP, kI, kD, integralCap};
+```bash
+python3 uploadAllAutons.py --dry
 ```
 
-### RAMSETE Parameters
+## Tuning Knobs That Matter Most
 
-```cpp
-constexpr float RAMSETE_ZETA = 0.4f;   // damping  (0 < ζ < 1)
-constexpr float RAMSETE_BETA = 45.0f;  // aggressiveness (β > 0)
-```
+The highest-impact constants for day-to-day work are:
 
----
+### Driver Feel
 
-## Autonomous Selector
+- `DRIVER_*`
 
-The brain screen provides a 3-button auton selector:
+### Point Turns and Drive-to-Point
 
-| Button | Action |
-|--------|--------|
-| **Left** | Previous auton |
-| **Centre** | Toggle alliance (RED ↔ BLUE) |
-| **Right** | Next auton |
+- `TURN_PID`
+- `DISTANCE_PID`
 
-The selected auton and alliance are shown on the screen. The selection stays
-live during `initialize()` and `competition_initialize()`, and is locked in
-when `autonomous()` starts.
+### RAMSETE Tracking
 
-Available routines:
+- `RAMSETE_ZETA`
+- `RAMSETE_BETA`
 
-| Name | Description |
-|------|-------------|
-| Negative 1 | Negative-side primary |
-| Negative 2 | Negative-side alternate |
-| Positive 1 | Positive-side primary |
-| Positive 2 | Positive-side alternate |
-| Skills | 60-second programming skills |
-| None | Do nothing |
+### Localization Confidence
 
-### Screen Layout
+- `MCL_*_DISTANCE_WEIGHT`
+- `MCL_DISTANCE_STDDEV_in`
+- `GPS_STDDEV_*`
+- `GPS_ERROR_THRESHOLD_in`
+- `LOC_GPS_*`
+- `LOC_MCL_*`
 
-```
-Line 0:  69580A
-Line 1:  << Negative 1 >>
-Line 2:  Alliance: RED
-Line 3:
-Line 4:  Pose: (12.3, -5.7) in
-Line 5:  Heading: 45.2 deg
-Line 6:  GPS locked (8 samples)
-Line 7:  [<Prev]  [Alliance]  [Next>]
-```
+### Startup Reliability
 
----
+- `STARTUP_POSE_MODE`
+- `STARTUP_GPS_MAX_WAIT_ms`
+- `STARTUP_GPS_READY_ERROR_in`
+- `STARTUP_GPS_STABLE_SAMPLES`
 
-## Driving
+## Current Caveats and Risks
 
-### Teleop Controls
+These are worth knowing before you trust the robot blindly:
 
-| Input | Action |
-|-------|--------|
-| Left stick Y | Forward / reverse |
-| Right stick X | Turn |
-| R1 (hold) | Intake forward |
-| R2 (hold) | Intake reverse |
-| L1 (press) | Toggle tongue pneumatic |
-| L2 (press) | Toggle wing pneumatic |
-| A (press) | Toggle select 1 pneumatic |
-| B (press) | Toggle select 2 pneumatic |
-
-The drive is **split arcade** — forward power from the left stick, turning
-from the right stick.  The drivetrain will only accept manual input when no
-autonomous command currently owns it.
-
-### Skills Re-Run
-
-During Skills, the autonomous routine auto-starts in `opcontrol()`.  The
-partner controller's **Right** button acts as an abort trigger.
-
----
-
-## Localization System
-
-### How It Works
-
-The Monte Carlo Localization system maintains a cloud of **250 particles**
-(configurable) that each represent a possible robot position on the field.
-
-Every 10 ms:
-
-1. **Predict** — move each particle by the odometry displacement (with noise).
-2. **Update** — weight each particle by the likelihood of the current sensor
-   readings given that particle's position.
-3. **Resample** — systematic low-variance resampling keeps the ensemble
-   healthy and focused on high-probability regions.
-4. **Estimate** — the weighted mean of all particles is the robot's estimated
-   pose.
-
-### Sensor Fusion
-
-| Sensor | Role | How it helps |
-|--------|------|-------------|
-| IMU | Heading source | All particles share this heading |
-| Odom (drive encoders or tracking wheel) | Displacement | Propagates particles each tick |
-| Distance sensors (×4) | Lateral correction | Ray-cast likelihood against field walls |
-| GPS | Global anchor | Gaussian likelihood on (x, y) |
-
-### GPS Initialisation
-
-At boot, the system optionally waits for the GPS to produce stable readings
-before seeding the particle filter:
-
-1. Polls `gps.get_position()` every 50 ms.
-2. Checks if consecutive readings drift less than
-   `STARTUP_GPS_READY_ERROR_M` (default 10 mm).
-3. After `STARTUP_GPS_STABLE_SAMPLES` (default 8) stable readings, the GPS
-   is considered locked.
-4. Depending on `STARTUP_POSE_MODE`, the initial pose is set from:
-   - GPS (x, y) + IMU heading (**recommended**), or
-   - Full GPS (x, y, heading), or
-   - Hard-coded config values only.
-
-The wait times out after `STARTUP_GPS_MAX_WAIT_MS` (default 8 s), falling
-back to config values if the GPS never locks.
-
----
-
-## Tuning Guide
-
-### Step 1 — Verify Odometry
-
-1. Set `ODOM_DEBUG_ENABLE = true` in config.h.
-2. Push the robot straight forward exactly 1 metre.
-3. Check the logged forward distance on the brain screen.
-4. Adjust `DRIVE_RADIUS` or `ODOM_RADIUS` until the reading matches.
-
-### Step 2 — Verify Heading
-
-1. Spin the robot exactly 360° by hand.
-2. The IMU heading should return to ~0°.
-3. If it drifts, recalibrate or check for magnetic interference.
-
-### Step 3 — Tune Distance PID
-
-1. Use `DriveMoveCommand` with a known distance (e.g. 0.5 m).
-2. Increase `DISTANCE_PID.kP` until the robot overshoots slightly.
-3. Add `DISTANCE_PID.kD` to damp oscillation.
-
-### Step 4 — Tune Turn PID
-
-1. Use `RotateCommand` to turn 90°.
-2. Follow the same kP → kD tuning flow.
-
-### Step 5 — Tune RAMSETE / LTV
-
-1. Run a simple straight-line path command.
-2. Increase `RAMSETE_BETA` for tighter tracking (more aggressive correction).
-3. Increase `RAMSETE_ZETA` for more damping if the robot oscillates.
-
-### Step 6 — Tune Feedforward
-
-1. Measure the robot's free speed at full voltage → derive `FF_kV`.
-2. Measure the minimum voltage to move from standstill → derive `FF_kS`.
-3. `FF_kA` is usually small; increase if the robot is sluggish on acceleration.
-
-### Step 7 — Tune MCL
-
-1. Place the robot at a known position.
-2. Check the pose readout on the brain screen.
-3. If it's wrong, adjust sensor weights, offsets, or `DRIVE_NOISE`.
-4. Reduce `NUM_PARTICLES` for faster updates (min ~100), increase for
-   better accuracy (max ~500).
-
----
+- The vertical tracking wheel is disabled, so forward odometry currently uses drive encoder fallback.
+- The lift is not implemented in hardware, so skills steps that call `liftCycle()` do not move a real mechanism right now.
+- `Negative 2` and `Positive 2` are not unique routines yet.
+- Alliance does not currently change path generation or scoring logic.
+- If localization becomes non-finite, the code has several safety fallbacks, but you should still inspect the ODOM and GPS pages before a match.
 
 ## Troubleshooting
 
-### Build fails with "gnu++26 not supported"
+### Robot boots but pose is wrong
 
-Your ARM GCC is too old. Install GCC ≥ 15:
-```bash
-brew install --cask gcc-arm-embedded
-```
+- Verify the GPS strip orientation and GPS error.
+- Confirm the configured field frame matches the actual field.
+- Check that the robot was motionless during IMU calibration.
+- Review the startup-pose section in [`include/config.h`](../include/config.h).
 
-### IntelliSense shows "unsupported option -mfloat-abi"
+### Robot feels too jumpy in driver control
 
-The `.vscode/c_cpp_properties.json` is pointing to a clang-based compiler.
-Change `compilerPath` to the real GCC:
-```json
-"compilerPath": "/opt/homebrew/bin/arm-none-eabi-g++"
-```
+- Reduce `DRIVER_FORWARD_CURVE_T`
+- Reduce `DRIVER_TURN_CURVE_T`
+- Lower `DRIVER_ACTIVE_BRAKE_POWER`
 
-### GPS never locks at boot
+### Robot undershoots or overshoots point moves
 
-- Verify the GPS strip is placed on the field perimeter.
-- Check `MCL_GPS_PORT` matches the actual wired port.
-- Increase `STARTUP_GPS_MAX_WAIT_MS` if the GPS is slow.
-- The system will fall back to config start-pose after the timeout.
+- Re-tune `DISTANCE_PID`
+- Confirm the pose source is stable on the ODOM and GPS tabs
 
-### Robot drives backwards
+### Robot turns the wrong amount
 
-One or more motor ports need to be negated. Flip the sign in
-`LEFT_DRIVE_PORTS` or `RIGHT_DRIVE_PORTS`.
+- Re-tune `TURN_PID`
+- Verify IMU heading is sane after startup
+- Confirm the heading convention is understood before changing config values
 
-### Tracking wheel reads zero
+### Autonomous follows the wrong routine
 
-- Confirm the rotation sensor port is correct.
-- Check `*_TRACKING_REVERSED` — try flipping it.
-- Ensure the tracking wheel is physically touching the ground.
+- Check the selected routine on the brain screen
+- Check the slot defaults in [`include/auton.h`](../include/auton.h)
+- If using uploaded slots, confirm `uploadAllAutons.py` was run successfully
 
-### Particle filter converges to wrong position
+## Where To Go Next
 
-- Check distance sensor offsets (inches, robot-local frame).
-- Reduce sensor weights for unreliable sensors.
-- Increase `NUM_PARTICLES` temporarily to diagnose.
-- Verify field walls are standard VEX competition (12′ × 12′).
-
-### `pros make` crashes with RuntimeError
-
-Use raw `make` instead:
-```bash
-make clean && make
-```
-
----
-
-*69580A — Team 69580A, 2025–2026 season.*
+- For exact motion-by-motion behavior, read [docs/MOTION_REFERENCE.md](MOTION_REFERENCE.md).
+- For step-by-step team workflows, read [docs/TUTORIALS.md](TUTORIALS.md).
+- For class-level interfaces, read [docs/API_REFERENCE.md](API_REFERENCE.md).

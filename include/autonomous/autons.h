@@ -11,6 +11,9 @@ enum class Auton {
     NEGATIVE_2,
     POSITIVE_1,
     POSITIVE_2,
+    EXAMPLE_MOVE,
+    EXAMPLE_TURN,
+    EXAMPLE_PATH,
     SKILLS,
     NONE
 };

@@ -3,13 +3,12 @@
  * Singleton command scheduler.
  *
  * Drives the entire command lifecycle: scheduling, requirements checking,
- * execution, cancellation, default-command fallback, and trigger polling.
+ * execution, cancellation, and default-command fallback.
  */
 #pragma once
 
 #include "command/command.h"
 #include "command/subsystem.h"
-#include "command/trigger.h"
 #include <vector>
 #include <algorithm>
 #include <map>
@@ -20,12 +19,7 @@ public:
 
     /** Advance one scheduler tick. Called from the 10 ms periodic task. */
     static void run() {
-        // 1. Poll triggers
-        for (auto& trig : triggers()) {
-            trig.poll();
-        }
-
-        // 2. Execute scheduled commands; retire finished ones
+        // 1. Execute scheduled commands; retire finished ones
         auto& cmds = commands();
         for (auto it = cmds.begin(); it != cmds.end(); ) {
             Command* cmd = *it;
@@ -40,14 +34,14 @@ public:
             }
         }
 
-        // 3. Run default commands for idle subsystems
+        // 2. Run default commands for idle subsystems
         for (Subsystem* sub : subsystems()) {
             if (sub->m_currentCommand == nullptr && sub->m_defaultCommand != nullptr) {
                 schedule(sub->m_defaultCommand);
             }
         }
 
-        // 4. Subsystem periodic hooks
+        // 3. Subsystem periodic hooks
         for (Subsystem* sub : subsystems()) {
             sub->periodic();
         }
@@ -105,20 +99,9 @@ public:
         }
     }
 
-    /** Add a trigger to be polled each tick. */
-    static void addTrigger(Trigger trigger) {
-        triggers().push_back(std::move(trigger));
-    }
-
-    /** Remove all triggers and free any trigger-owned command objects. */
-    static void clearTriggers() {
-        triggers().clear();
-    }
-
-    /** Full scheduler reset: cancel commands and clear all triggers. */
+    /** Full scheduler reset: cancel every running command. */
     static void reset() {
         cancelAll();
-        clearTriggers();
     }
 
     /** True if the given command is currently scheduled. */
@@ -143,10 +126,6 @@ private:
     }
     static std::vector<Subsystem*>& subsystems() {
         static std::vector<Subsystem*> v;
-        return v;
-    }
-    static std::vector<Trigger>& triggers() {
-        static std::vector<Trigger> v;
         return v;
     }
 };

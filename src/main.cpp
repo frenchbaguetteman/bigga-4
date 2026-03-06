@@ -649,7 +649,7 @@ void autonomous() {
 
 void opcontrol() {
     // Opcontrol may re-enter after disable/enable cycles; reset scheduler
-    // state to avoid duplicated trigger bindings and stale commands.
+    // state to avoid stale commands from the previous run.
     CommandScheduler::reset();
 
     if (autonCommand && autonCommand->isScheduled()) {
@@ -659,37 +659,54 @@ void opcontrol() {
     pros::Controller master(pros::E_CONTROLLER_MASTER);
     pros::Controller partner(pros::E_CONTROLLER_PARTNER);
 
-    // ── Trigger bindings ────────────────────────────────────────────────
-
-    Trigger r1Trigger([&]() { return master.get_digital(DIGITAL_R1); });
-    r1Trigger.whileTrue(new IntakeSpinCommand(intakes, 127));
-    CommandScheduler::addTrigger(std::move(r1Trigger));
-
-    Trigger r2Trigger([&]() { return master.get_digital(DIGITAL_R2); });
-    r2Trigger.whileTrue(new IntakeSpinCommand(intakes, -127));
-    CommandScheduler::addTrigger(std::move(r2Trigger));
-
-    Trigger l1Trigger([&]() { return master.get_digital(DIGITAL_L1); });
-    l1Trigger.onTrue(shared::toggleTongue(solenoids));
-    CommandScheduler::addTrigger(std::move(l1Trigger));
-
-    Trigger l2Trigger([&]() { return master.get_digital(DIGITAL_L2); });
-    l2Trigger.onTrue(shared::toggleWing(solenoids));
-    CommandScheduler::addTrigger(std::move(l2Trigger));
-
-    Trigger aTrigger([&]() { return master.get_digital(DIGITAL_A); });
-    aTrigger.onTrue(shared::toggleSelect1(solenoids));
-    CommandScheduler::addTrigger(std::move(aTrigger));
-
-    Trigger bTrigger([&]() { return master.get_digital(DIGITAL_B); });
-    bTrigger.onTrue(shared::toggleSelect2(solenoids));
-    CommandScheduler::addTrigger(std::move(bTrigger));
+    IntakeSpinCommand intakeInCommand(intakes, 127);
+    IntakeSpinCommand intakeOutCommand(intakes, -127);
 
     if (AutonSelector::getAuton() == Auton::SKILLS && autonCommand) {
         CommandScheduler::schedule(autonCommand.get());
     }
 
     while (true) {
+        const bool r1Held = master.get_digital(DIGITAL_R1);
+        const bool r2Held = master.get_digital(DIGITAL_R2);
+
+        // Preserve command-based intake ownership while polling buttons directly.
+        if (r2Held) {
+            if (intakeInCommand.isScheduled()) {
+                intakeInCommand.cancel();
+            }
+            if (!intakeOutCommand.isScheduled()) {
+                CommandScheduler::schedule(&intakeOutCommand);
+            }
+        } else if (r1Held) {
+            if (intakeOutCommand.isScheduled()) {
+                intakeOutCommand.cancel();
+            }
+            if (!intakeInCommand.isScheduled()) {
+                CommandScheduler::schedule(&intakeInCommand);
+            }
+        } else {
+            if (intakeInCommand.isScheduled()) {
+                intakeInCommand.cancel();
+            }
+            if (intakeOutCommand.isScheduled()) {
+                intakeOutCommand.cancel();
+            }
+        }
+
+        if (master.get_digital_new_press(DIGITAL_L1)) {
+            solenoids->toggleTongue();
+        }
+        if (master.get_digital_new_press(DIGITAL_L2)) {
+            solenoids->toggleWing();
+        }
+        if (master.get_digital_new_press(DIGITAL_A)) {
+            solenoids->toggleSelect1();
+        }
+        if (master.get_digital_new_press(DIGITAL_B)) {
+            solenoids->toggleSelect2();
+        }
+
         if (AutonSelector::getAuton() == Auton::SKILLS &&
             autonCommand && autonCommand->isScheduled() &&
             partner.get_digital(DIGITAL_RIGHT)) {
