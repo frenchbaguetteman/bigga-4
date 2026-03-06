@@ -110,6 +110,17 @@ public:
         triggers().push_back(std::move(trigger));
     }
 
+    /** Remove all triggers and free any trigger-owned command objects. */
+    static void clearTriggers() {
+        triggers().clear();
+    }
+
+    /** Full scheduler reset: cancel commands and clear all triggers. */
+    static void reset() {
+        cancelAll();
+        clearTriggers();
+    }
+
     /** True if the given command is currently scheduled. */
     static bool isScheduled(const Command* cmd) {
         auto& cmds = commands();

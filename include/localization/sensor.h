@@ -8,6 +8,7 @@
 #pragma once
 
 #include "Eigen/Core"
+#include <cstddef>
 #include <optional>
 
 class SensorModel {
@@ -26,4 +27,13 @@ public:
 
     /** Refresh the sensor reading (called once per filter update). */
     virtual void update() {}
+
+    /** Whether this sensor has a usable observation after update(). */
+    virtual bool hasObservation() const { return false; }
+
+    /** Human-readable sensor name for debug logs. */
+    virtual const char* debugName() const { return "sensor"; }
+
+    /** Emit a one-line sensor debug summary at a reference pose. */
+    virtual void debugPrint(const Eigen::Vector3f& referencePose, size_t index) const {}
 };

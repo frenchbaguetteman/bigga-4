@@ -70,8 +70,7 @@ public:
         m_lastError = gpsErrorM;
 
         // If GPS error exceeds threshold, skip this update (don't trust it)
-        constexpr float GPS_ERROR_THRESHOLD_M = 0.5f;  // config tunable
-        if (gpsErrorM > GPS_ERROR_THRESHOLD_M) {
+        if (gpsErrorM > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
             m_robotCenter = std::nullopt;
             return;
         }
@@ -86,7 +85,7 @@ public:
             return;
         }
         // Convert from VEX compass (0° = north, CW+) to internal (0° = east/fwd, CCW+)
-        float robotHeading = CONFIG::gpsHeadingDegToInternalRad(
+        float robotHeading = CONFIG::gpsSensorHeadingDegToInternalRad(
             rawHeadingDeg - m_headingOffsetDeg);
 
         // Rotate mount offset into world frame
@@ -100,20 +99,22 @@ public:
         m_robotCenter = gpsWorld - offsetWorld;
     }
 
+    bool hasObservation() const override { return m_robotCenter.has_value(); }
+
     std::optional<float> p(const Eigen::Vector3f& particle) override {
         if (!m_robotCenter) return std::nullopt;
 
         // Adaptively adjust stddev based on GPS error
         float currentStddev = m_stddev;
         if (m_lastError >= 0.0f) {
-            if (m_lastError > CONFIG::GPS_ERROR_GOOD_M) {
+            if (m_lastError > CONFIG::GPS_ERROR_GOOD.getValue()) {
                 // GPS error is higher than ideal; inflate stddev to reduce GPS influence
-                float excessError = m_lastError - CONFIG::GPS_ERROR_GOOD_M;
+                float excessError = m_lastError - CONFIG::GPS_ERROR_GOOD.getValue();
                 float inflationFactor = 1.0f + CONFIG::GPS_ERROR_SCALE_MULTIPLIER * excessError;
                 currentStddev = m_stddev * inflationFactor;
                 // Clamp to configured limits
-                currentStddev = std::max(CONFIG::GPS_STDDEV_MIN_M,
-                                       std::min(CONFIG::GPS_STDDEV_MAX_M, currentStddev));
+                currentStddev = std::max(CONFIG::GPS_STDDEV_MIN.getValue(),
+                                       std::min(CONFIG::GPS_STDDEV_MAX.getValue(), currentStddev));
             }
         }
 

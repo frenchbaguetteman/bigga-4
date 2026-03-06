@@ -1,128 +1,205 @@
 /**
  * @file distance.h
- * Distance-sensor likelihood model.
+ * Distance-sensor likelihood model for wall-based localization.
  *
- * Given a particle pose and a known sensor mounting offset, computes the
- * expected distance to the nearest field wall by ray-casting, then
- * evaluates a Gaussian likelihood centred on the measured distance.
- *
- * Supports a per-sensor weight multiplier for MCL fusion tuning.
+ * The model ray-casts each mounted sensor against the square field walls,
+ * compares the expected wall distance to the current sensor reading, then
+ * evaluates a confidence-aware robust likelihood. Bad readings are ignored,
+ * while improbable particles receive a soft but non-zero penalty instead of
+ * collapsing the whole filter.
  */
 #pragma once
 
-#include "localization/sensor.h"
 #include "Eigen/Dense"
 #include "config.h"
-#include "utils/localization_math.h"
+#include "localization/sensor.h"
 #include "pros/distance.hpp"
-#include <cmath>
+#include "utils/localization_math.h"
+
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <limits>
+#include <optional>
 
 class DistanceSensorModel : public SensorModel {
 public:
-    /**
-     * @param port       PROS smart-port number
-     * @param offset     sensor mounting offset (x, y, angleOffset) relative
-     *                   to robot centre when robot heading = 0
-     * @param weight     fusion weight multiplier (0..1, default 1.0)
-     * @param stddev     measurement noise standard deviation (metres)
-     */
-    DistanceSensorModel(int port, Eigen::Vector3f offset,
-                        float weight = 1.0f, float stddev = 0.03f)
-        : m_sensor(port), m_offset(offset), m_weight(weight), m_stddev(stddev) {}
+    DistanceSensorModel(
+        int port,
+        Eigen::Vector3f offset,
+        float weight = 1.0f,
+        float stddev = CONFIG::MCL_DISTANCE_STDDEV.getValue(),
+        const char* name = "dist")
+        : m_sensor(port)
+        , m_offset(offset)
+        , m_weight(std::clamp(weight, 0.0f, 1.0f))
+        , m_baseStddev(std::max(stddev, 0.005f))
+        , m_name(name) {}
 
     void update() override {
-        int raw = m_sensor.get();
-        // Reject failed readings (returns PROS_ERR or 9999 when no object detected)
-        // Valid range: 1 mm to ~9998 mm
-        if (raw <= 0 || raw >= 9999) {
-            m_reading = std::nullopt;
+        m_reading = std::nullopt;
+
+        const int rawMm = m_sensor.get_distance();
+        if (rawMm <= 0 || rawMm >= 9999) return;
+
+        const float rangeM = static_cast<float>(rawMm) / 1000.0f;
+        if (!LocMath::isFinite(rangeM)) return;
+        if (rangeM < CONFIG::MCL_DISTANCE_MIN_RANGE.getValue() ||
+            rangeM > CONFIG::MCL_DISTANCE_MAX_RANGE.getValue()) {
             return;
         }
-        
-        // Convert mm to metres
-        float distM = raw / 1000.0f;
-        
-        // Reject non-finite values (sanity check)
-        if (!LocMath::isFinite(distM) || distM < 0.0f) {
-            m_reading = std::nullopt;
-            return;
-        }
-        
-        m_reading = distM;
+
+        m_reading = Reading{
+            rangeM,
+            m_sensor.get_confidence(),
+        };
+    }
+
+    bool hasObservation() const override {
+        return !CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING && m_reading.has_value();
     }
 
     std::optional<float> p(const Eigen::Vector3f& particle) override {
-        // Skip distance sensors entirely if debug flag is set
-        if (CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING) {
-            return std::nullopt;
-        }
-        
-        if (!m_reading) return std::nullopt;
+        if (!hasObservation()) return std::nullopt;
         if (!LocMath::isFinitePose(particle)) return std::nullopt;
 
-        float expected = expectedDistance(particle);
-        if (!LocMath::isFinite(expected) || expected <= 0.0f) return std::nullopt;
+        const std::optional<float> expected = expectedDistance(particle);
+        if (!expected) {
+            return static_cast<float>(LocMath::LIKELIHOOD_EPS);
+        }
 
-        float diff = *m_reading - expected;
-        float exponent = -(diff * diff) / (2.0f * m_stddev * m_stddev);
-        float likelihood = std::exp(exponent);
-        // Blend towards uniform (1.0) based on weight: lower weight → less influence
-        return m_weight * likelihood + (1.0f - m_weight);
+        const float sigma = effectiveStddev(*m_reading);
+        const float residual = m_reading->rangeM - *expected;
+        const float likelihood = std::pow(
+            robustLikelihood(residual, sigma),
+            m_weight);
+
+        return std::clamp(likelihood,
+                          static_cast<float>(LocMath::LIKELIHOOD_EPS),
+                          1.0f);
+    }
+
+    const char* debugName() const override { return m_name; }
+
+    void debugPrint(const Eigen::Vector3f& referencePose, size_t index) const override {
+        if (!m_reading) {
+            std::printf("[PFDBG] sensor[%zu] %s reading=INVALID\n", index, m_name);
+            return;
+        }
+
+        const std::optional<float> expected = expectedDistance(referencePose);
+        const float sigma = effectiveStddev(*m_reading);
+        if (!expected) {
+            std::printf(
+                "[PFDBG] sensor[%zu] %s raw=%.3f conf=%d sigma=%.3f exp=INVALID\n",
+                index,
+                m_name,
+                m_reading->rangeM,
+                m_reading->confidence,
+                sigma);
+            return;
+        }
+
+        const float residual = m_reading->rangeM - *expected;
+        const float likelihood = std::pow(
+            robustLikelihood(residual, sigma),
+            m_weight);
+        std::printf(
+            "[PFDBG] sensor[%zu] %s raw=%.3f exp=%.3f resid=%+.3f conf=%d sigma=%.3f like=%.5f w=%.2f\n",
+            index,
+            m_name,
+            m_reading->rangeM,
+            *expected,
+            residual,
+            m_reading->confidence,
+            sigma,
+            likelihood,
+            m_weight);
     }
 
 private:
+    struct Reading {
+        float rangeM = 0.0f;
+        int confidence = -1;
+    };
+
     pros::Distance m_sensor;
     Eigen::Vector3f m_offset;
     float m_weight;
-    float m_stddev;
-    std::optional<float> m_reading;
+    float m_baseStddev;
+    std::optional<Reading> m_reading;
+    const char* m_name;
 
-    /**
-     * Ray-cast from the sensor's world position along its world heading
-     * to the nearest axis-aligned field wall.
-     */
-    float expectedDistance(const Eigen::Vector3f& particle) const {
-        float robotTheta = particle.z();
-        float cosT = std::cos(robotTheta);
-        float sinT = std::sin(robotTheta);
+    float effectiveStddev(const Reading& reading) const {
+        if (reading.rangeM <= CONFIG::MCL_DISTANCE_CONFIDENCE_EXEMPT.getValue()) {
+            return m_baseStddev;
+        }
 
-        // Sensor world position
-        float sx = particle.x() + m_offset.x() * cosT - m_offset.y() * sinT;
-        float sy = particle.y() + m_offset.x() * sinT + m_offset.y() * cosT;
+        if (reading.confidence < 0) {
+            return m_baseStddev * CONFIG::MCL_DISTANCE_LOW_CONFIDENCE_SIGMA_SCALE;
+        }
 
-        // Sensor world heading
-        float sTheta = robotTheta + m_offset.z();
-        float dx = std::cos(sTheta);
-        float dy = std::sin(sTheta);
+        const float confidence = std::clamp(
+            static_cast<float>(reading.confidence) / 63.0f,
+            0.0f,
+            1.0f);
+        const float scale = 1.0f +
+            (1.0f - confidence) *
+                (CONFIG::MCL_DISTANCE_LOW_CONFIDENCE_SIGMA_SCALE - 1.0f);
+        return m_baseStddev * scale;
+    }
 
-        const float H = CONFIG::FIELD_HALF_SIZE;  // wall positions ±H
-        float minDist = 1e6f;
+    static float robustLikelihood(float residual, float sigma) {
+        const float normalized = residual / std::max(sigma, 0.005f);
+        const float gaussian = std::exp(-0.5f * normalized * normalized);
+        const float floor = CONFIG::MCL_DISTANCE_LIKELIHOOD_FLOOR;
+        return floor + (1.0f - floor) * gaussian;
+    }
 
-        // Intersect with four walls: x = ±H, y = ±H
-        auto tryWall = [&](float wallVal, float origin, float dir) -> float {
-            if (std::fabs(dir) < 1e-9f) return 1e6f;
-            float t = (wallVal - origin) / dir;
-            return (t > 0.001f) ? t : 1e6f;
+    std::optional<float> expectedDistance(const Eigen::Vector3f& particle) const {
+        const float robotTheta = particle.z();
+        const float cosT = std::cos(robotTheta);
+        const float sinT = std::sin(robotTheta);
+
+        const float sx = particle.x() + m_offset.x() * cosT - m_offset.y() * sinT;
+        const float sy = particle.y() + m_offset.x() * sinT + m_offset.y() * cosT;
+
+        const float H = CONFIG::FIELD_HALF_SIZE.getValue();
+        if (sx < -H || sx > H || sy < -H || sy > H) {
+            return std::nullopt;
+        }
+
+        const float sensorTheta = robotTheta + m_offset.z();
+        const float dx = std::cos(sensorTheta);
+        const float dy = std::sin(sensorTheta);
+
+        float minDist = std::numeric_limits<float>::infinity();
+
+        auto considerWall = [&](float t, float otherAxis) {
+            if (t <= 0.001f || !LocMath::isFinite(t)) return;
+            if (std::fabs(otherAxis) > H + 1e-4f) return;
+            minDist = std::min(minDist, t);
         };
 
-        // x = +H  (right wall)
-        { float t = tryWall(H, sx, dx);
-          float iy = sy + t * dy;
-          if (t < minDist && std::fabs(iy) <= H) minDist = t; }
-        // x = -H  (left wall)
-        { float t = tryWall(-H, sx, dx);
-          float iy = sy + t * dy;
-          if (t < minDist && std::fabs(iy) <= H) minDist = t; }
-        // y = +H  (top wall)
-        { float t = tryWall(H, sy, dy);
-          float ix = sx + t * dx;
-          if (t < minDist && std::fabs(ix) <= H) minDist = t; }
-        // y = -H  (bottom wall)
-        { float t = tryWall(-H, sy, dy);
-          float ix = sx + t * dx;
-          if (t < minDist && std::fabs(ix) <= H) minDist = t; }
+        if (std::fabs(dx) > 1e-6f) {
+            float t = (H - sx) / dx;
+            considerWall(t, sy + t * dy);
+            t = (-H - sx) / dx;
+            considerWall(t, sy + t * dy);
+        }
 
-        return (minDist < 1e5f) ? minDist : -1.0f;
+        if (std::fabs(dy) > 1e-6f) {
+            float t = (H - sy) / dy;
+            considerWall(t, sx + t * dx);
+            t = (-H - sy) / dy;
+            considerWall(t, sx + t * dx);
+        }
+
+        if (!LocMath::isFinite(minDist) ||
+            minDist > CONFIG::MCL_DISTANCE_MAX_RANGE.getValue()) {
+            return std::nullopt;
+        }
+
+        return minDist;
     }
 };

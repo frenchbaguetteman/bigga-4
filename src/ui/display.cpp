@@ -142,9 +142,11 @@ void clearTrail() {
 void update(const BrainScreen::RuntimeViewModel& vm) {
     drawFieldBase();
 
+    const Eigen::Vector3f& mapPose = vm.combinedPose;
+
     // Robot position on map (clamped)
-    int rx = toScreenX(vm.combinedPose.x());
-    int ry = toScreenY(vm.combinedPose.y());
+    int rx = toScreenX(mapPose.x());
+    int ry = toScreenY(mapPose.y());
     if (rx < MAP_X0)          rx = MAP_X0;
     if (rx > MAP_X0 + MAP_PX) rx = MAP_X0 + MAP_PX;
     if (ry < MAP_Y0)          ry = MAP_Y0;
@@ -170,7 +172,7 @@ void update(const BrainScreen::RuntimeViewModel& vm) {
     pros::screen::set_pen(COL_ROBOT);
     pros::screen::fill_circle(rx, ry, 5);
 
-    float h = vm.combinedPose.z();
+    float h = mapPose.z();
     int lx = rx + static_cast<int>(std::cos(h) * 14.0f);
     int ly = ry - static_cast<int>(std::sin(h) * 14.0f);
     pros::screen::set_pen(COL_WHITE);

@@ -15,6 +15,8 @@
 #include <cmath>
 #include <string>
 #include <memory>
+#include <optional>
+#include <utility>
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global subsystems & localization
@@ -39,12 +41,134 @@ static Command* autonCommand = nullptr;
 
 static std::function<Eigen::Vector3f()> poseSource;
 static std::unique_ptr<pros::Gps> uiGps;
+static Eigen::Vector3f combinedPose(0.0f, 0.0f, 0.0f);
+static Eigen::Vector2f combinedCorrection(0.0f, 0.0f);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Status string for screen (only touched from screen task after init)
 // ═══════════════════════════════════════════════════════════════════════════
 
 static std::string screenStatus = "";
+
+struct GpsPoseSample {
+    Eigen::Vector3f pose{0.0f, 0.0f, 0.0f};
+    float errorM = -1.0f;
+};
+
+static Eigen::Vector2f clampVectorMagnitude(const Eigen::Vector2f& v, float maxMagnitude) {
+    if (!LocMath::isFiniteVec2(v) || maxMagnitude <= 0.0f) {
+        return Eigen::Vector2f(0.0f, 0.0f);
+    }
+
+    const float norm = v.norm();
+    if (norm <= maxMagnitude || norm <= 1e-6f) return v;
+    return v * (maxMagnitude / norm);
+}
+
+static Eigen::Vector2f moveTowardsVec2(const Eigen::Vector2f& current,
+                                       const Eigen::Vector2f& target,
+                                       float maxStep) {
+    if (!LocMath::isFiniteVec2(current) || !LocMath::isFiniteVec2(target) || maxStep <= 0.0f) {
+        return current;
+    }
+
+    const Eigen::Vector2f delta = target - current;
+    const float dist = delta.norm();
+    if (dist <= maxStep || dist <= 1e-6f) return target;
+    return current + delta * (maxStep / dist);
+}
+
+static std::optional<GpsPoseSample> sampleGpsPose() {
+    if (!uiGps) return std::nullopt;
+
+    auto pos = uiGps->get_position();
+    const float errorM = static_cast<float>(uiGps->get_error());
+    Eigen::Vector2f rawGps(
+        static_cast<float>(pos.x),
+        static_cast<float>(pos.y));
+    Eigen::Vector2f gpsField = CONFIG::transformGpsToFieldFrame(rawGps);
+    const float heading = CONFIG::gpsSensorHeadingDegToInternalRad(static_cast<float>(
+        uiGps->get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_deg));
+
+    if (!std::isfinite(gpsField.x()) || !std::isfinite(gpsField.y()) ||
+        !std::isfinite(heading) || !std::isfinite(errorM) || errorM < 0.0f) {
+        return std::nullopt;
+    }
+
+    const float cosT = std::cos(heading);
+    const float sinT = std::sin(heading);
+    const float ox = CONFIG::GPS_OFFSET.x() * cosT - CONFIG::GPS_OFFSET.y() * sinT;
+    const float oy = CONFIG::GPS_OFFSET.x() * sinT + CONFIG::GPS_OFFSET.y() * cosT;
+
+    GpsPoseSample sample;
+    sample.pose = Eigen::Vector3f(gpsField.x() - ox, gpsField.y() - oy, heading);
+    sample.errorM = errorM;
+    return sample;
+}
+
+static Eigen::Vector3f computeCombinedPose() {
+    Eigen::Vector3f odom = drivetrain ? drivetrain->getOdomPose()
+                                      : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+    if (!LocMath::isFinitePose(odom)) {
+        combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
+        combinedPose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        return combinedPose;
+    }
+
+    const float motionNorm = drivetrain ? drivetrain->getLastStepDisplacementDebug().norm() : 0.0f;
+    const bool still = motionNorm <= CONFIG::LOC_FUSION_STILLNESS_DEADBAND.getValue();
+
+    bool haveTarget = false;
+    Eigen::Vector2f targetCorrection = combinedCorrection;
+    float maxCorrection = 0.0f;
+    float maxStep = 0.0f;
+
+    const std::optional<GpsPoseSample> gpsSample = sampleGpsPose();
+    if (still && gpsSample &&
+        gpsSample->errorM <= CONFIG::LOC_GPS_RUNTIME_ERROR_MAX.getValue()) {
+        targetCorrection = Eigen::Vector2f(
+            gpsSample->pose.x() - odom.x(),
+            gpsSample->pose.y() - odom.y());
+        maxCorrection = CONFIG::LOC_GPS_CORRECTION_MAX.getValue();
+        maxStep = CONFIG::LOC_GPS_CORRECTION_STEP.getValue();
+        haveTarget = true;
+    } else if (!still && particleFilter) {
+        const Eigen::Vector3f pf = particleFilter->getPrediction();
+        const Eigen::Vector2f pfCorrection(
+            pf.x() - odom.x(),
+            pf.y() - odom.y());
+        const float correctionJump = (pfCorrection - combinedCorrection).norm();
+
+        if (LocMath::isFinitePose(pf) &&
+            particleFilter->lastUpdateUsedMeasurements() &&
+            particleFilter->getLastActiveSensorCount() >=
+                static_cast<size_t>(CONFIG::LOC_MCL_MIN_ACTIVE_SENSORS) &&
+            correctionJump <= CONFIG::LOC_MCL_CORRECTION_JUMP_REJECT.getValue()) {
+            targetCorrection = pfCorrection;
+            maxCorrection = CONFIG::LOC_MCL_CORRECTION_MAX.getValue();
+            maxStep = CONFIG::LOC_MCL_CORRECTION_STEP.getValue();
+            haveTarget = true;
+        }
+    }
+
+    if (haveTarget) {
+        targetCorrection = clampVectorMagnitude(targetCorrection, maxCorrection);
+        combinedCorrection = moveTowardsVec2(combinedCorrection, targetCorrection, maxStep);
+    } else if (!LocMath::isFiniteVec2(combinedCorrection)) {
+        combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
+    }
+
+    Eigen::Vector2f fusedXY(
+        odom.x() + combinedCorrection.x(),
+        odom.y() + combinedCorrection.y());
+    if (!LocMath::isFiniteVec2(fusedXY)) {
+        combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
+        fusedXY = Eigen::Vector2f(odom.x(), odom.y());
+    }
+
+    combinedPose = Eigen::Vector3f(fusedXY.x(), fusedXY.y(), odom.z());
+    return combinedPose;
+}
 
 static void renderInitStage(float progress,
                             const std::string& stage,
@@ -69,62 +193,51 @@ void update_loop() {
         CommandScheduler::run();
         
         // 2. Then run ParticleFilter::update() which calls the predictionFn lambda
-        //    EXACTLY ONCE. This lambda calls consumePendingDisplacement(),
-        //    which atomically returns the cached delta and zeros it.
-        //    Do NOT let both drivetrain odometry and particle filter separately
-        //    "discover" motion from raw sensors in the same tick.
+        //    EXACTLY ONCE. The filter consumes forward odometry as its motion
+        //    proposal while distance sensors handle the measurement correction.
         if (particleFilter) {
             particleFilter->update();
         }
+        Eigen::Vector3f fusedPose = computeCombinedPose();
 
         // Rate-limited debug instrumentation
         if constexpr (CONFIG::ODOM_DEBUG_ENABLE) {
             uint32_t now = pros::millis();
-            if (now - lastDebugMs >= CONFIG::ODOM_DEBUG_LOG_EVERY_MS) {
+            if (now - lastDebugMs >= CONFIG::ODOM_DEBUG_LOG_EVERY_ms) {
                 lastDebugMs = now;
                 
                 // === Raw IMU heading ===
                 float imuH = drivetrain ? drivetrain->getHeading() : 0.0f;
                 
-                // === Field-aligned heading (should match IMU after alignment) ===
-                // In steady state with good initial setup, IMU heading IS field-aligned.
-                
-                // === Raw GPS x/y (in transformed field frame) ===
                 float gpsX = 0, gpsY = 0, gpsH = 0, gpsErr = -1.0f;
                 bool gpsOk = false;
-                if (uiGps) {
-                    auto gp = uiGps->get_position();
-                    Eigen::Vector2f rawGps(
-                        static_cast<float>(gp.x),
-                        static_cast<float>(gp.y));
-                    Eigen::Vector2f gpsField = CONFIG::transformGpsToFieldFrame(rawGps);
-                    gpsX = gpsField.x();
-                    gpsY = gpsField.y();
-                    gpsH = CONFIG::gpsHeadingDegToInternalRad(static_cast<float>(
-                        uiGps->get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
-                    gpsErr = static_cast<float>(uiGps->get_error());
-                    gpsOk = std::isfinite(gpsX) && std::isfinite(gpsY) && std::isfinite(gpsErr) && gpsErr >= 0.0f;
+                if (auto gpsSample = sampleGpsPose()) {
+                    gpsX = gpsSample->pose.x();
+                    gpsY = gpsSample->pose.y();
+                    gpsH = gpsSample->pose.z();
+                    gpsErr = gpsSample->errorM;
+                    gpsOk = true;
                 }
                 
-                // === Odom delta per tick (from latest updateOdometry) ===
-                Eigen::Vector2f odomdelta = drivetrain ? drivetrain->getPendingDisplacementDebug()
-                                                        : Eigen::Vector2f(0, 0);
+                Eigen::Vector2f odomdelta = drivetrain ? drivetrain->getLastStepDisplacementDebug()
+                                                       : Eigen::Vector2f(0, 0);
                 float deltaLen = odomdelta.norm();
                 
-                // === Final fused pose ===
                 auto odom = drivetrain ? drivetrain->getOdomPose()
                                        : Eigen::Vector3f(0, 0, 0);
                 auto pf   = particleFilter ? particleFilter->getPrediction()
                                            : Eigen::Vector3f(0, 0, 0);
                 
-                // === Log in comprehensive format ===
                 std::printf("[LOC] odom_delta=%.4f imu=%.3f gps(%c)=(%.3f,%.3f,%.3f,err=%.3f) "
-                            "odom=(%.3f,%.3f,%.3f) pf=(%.3f,%.3f,%.3f)\n",
+                            "odom=(%.3f,%.3f,%.3f) pf=(%.3f,%.3f,%.3f) "
+                            "comb=(%.3f,%.3f,%.3f) corr=(%.3f,%.3f)|%.3f\n",
                     deltaLen,
                     imuH,
                     gpsOk ? 'Y' : 'N', gpsX, gpsY, gpsH, gpsErr,
                     odom.x(), odom.y(), odom.z(),
-                    pf.x(), pf.y(), pf.z());
+                    pf.x(), pf.y(), pf.z(),
+                    fusedPose.x(), fusedPose.y(), fusedPose.z(),
+                    combinedCorrection.x(), combinedCorrection.y(), combinedCorrection.norm());
             }
         }
 
@@ -159,29 +272,19 @@ void screen_update_loop() {
             vm.pureMclPose = vm.pureOdomPose;
         }
 
-        vm.combinedPose = poseSource ? poseSource() : vm.pureMclPose;
+        vm.combinedPose = combinedPose;
         if (!LocMath::isFinitePose(vm.combinedPose)) {
-            std::printf("[LOC] non-finite combinedPose, fallback to last finite\n");
-            vm.combinedPose = lastFiniteCombined;
+            vm.combinedPose = vm.pureOdomPose;
         }
         if (LocMath::isFinitePose(vm.combinedPose)) {
             lastFiniteCombined = vm.combinedPose;
+        } else {
+            vm.combinedPose = lastFiniteCombined;
         }
         vm.pose = vm.combinedPose;
 
-        if (uiGps) {
-            auto pos = uiGps->get_position();
-            Eigen::Vector2f rawGps(
-                static_cast<float>(pos.x),
-                static_cast<float>(pos.y));
-            Eigen::Vector2f gpsField = CONFIG::transformGpsToFieldFrame(rawGps);
-            float gx = gpsField.x();
-            float gy = gpsField.y();
-            float gh = CONFIG::compassDegToMathRad(static_cast<float>(
-                uiGps->get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
-            if (std::isfinite(gx) && std::isfinite(gy) && std::isfinite(gh)) {
-                vm.gpsPose = Eigen::Vector3f(gx, gy, gh);
-            }
+        if (auto gpsSample = sampleGpsPose()) {
+            vm.gpsPose = gpsSample->pose;
         }
 
         BrainScreen::renderRuntime(vm);
@@ -223,13 +326,21 @@ static void subsystemInit() {
 static Eigen::Vector3f acquireInitialPose() {
     // Fallback pose from config (inches → metres, compass-deg → math-rad)
     Eigen::Vector3f configPose(
-        static_cast<float>(CONFIG::START_POSE_X_IN) * CONFIG::INCH_TO_M,
-        static_cast<float>(CONFIG::START_POSE_Y_IN) * CONFIG::INCH_TO_M,
-        CONFIG::compassDegToMathRad(static_cast<float>(CONFIG::START_POSE_THETA_DEG)));
+        CONFIG::START_POSE_X.getValue(),
+        CONFIG::START_POSE_Y.getValue(),
+        CONFIG::START_POSE_THETA.getValue());
 
     if (CONFIG::STARTUP_POSE_MODE ==
         CONFIG::StartupPoseMode::ConfiguredStartPoseOnly) {
         return configPose;
+    }
+
+    // IMU heading is only relative until we explicitly seed it into the field frame.
+    // For GPSXY+IMU startup, use the configured start heading as that field reference,
+    // then preserve any real rotation that happens during GPS lock acquisition.
+    if (CONFIG::STARTUP_POSE_MODE == CONFIG::StartupPoseMode::GPSXYPlusIMUHeading && drivetrain) {
+        drivetrain->resetHeading(configPose.z());
+        pros::delay(20);
     }
 
     pros::Gps gps(CONFIG::MCL_GPS_PORT);
@@ -238,7 +349,9 @@ static Eigen::Vector3f acquireInitialPose() {
     float lastX = 0, lastY = 0;
     bool hasLast = false;
     int stableCount = 0;
-    constexpr int maxPolls = 40;   // 40 × 50 ms = 2 s max
+    constexpr int pollDelayMs = 50;
+    const int maxPolls = static_cast<int>(
+        (CONFIG::STARTUP_GPS_MAX_WAIT_ms + pollDelayMs - 1) / pollDelayMs);
 
     for (int i = 0; i < maxPolls; ++i) {
         auto pos = gps.get_position();
@@ -250,27 +363,27 @@ static Eigen::Vector3f acquireInitialPose() {
         float y = gpsField.y();
 
         if (!std::isfinite(x) || !std::isfinite(y)) {
-            pros::delay(50);
+            pros::delay(pollDelayMs);
             continue;
         }
 
         // Reject absurd magnitudes (outside plausible field area)
         if (std::fabs(x) > LocMath::GPS_ABSURD_LIMIT_M ||
             std::fabs(y) > LocMath::GPS_ABSURD_LIMIT_M) {
-            pros::delay(50);
+            pros::delay(pollDelayMs);
             continue;
         }
 
         // Skip initial zeros (GPS hasn't booted yet)
         if (!hasLast && std::abs(x) < 0.001f && std::abs(y) < 0.001f) {
-            pros::delay(50);
+            pros::delay(pollDelayMs);
             continue;
         }
 
         if (hasLast) {
             float dx = x - lastX, dy = y - lastY;
             float drift = std::sqrt(dx * dx + dy * dy);
-            if (drift < static_cast<float>(CONFIG::STARTUP_GPS_READY_ERROR_M)) {
+            if (drift < CONFIG::STARTUP_GPS_READY_ERROR.getValue()) {
                 ++stableCount;
             } else {
                 stableCount = 0;
@@ -290,7 +403,7 @@ static Eigen::Vector3f acquireInitialPose() {
             break;
         }
 
-        pros::delay(50);
+        pros::delay(pollDelayMs);
     }
 
     if (!hasLast || stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
@@ -300,8 +413,8 @@ static Eigen::Vector3f acquireInitialPose() {
         return configPose;
     }
 
-    float gpsHeadingRad = CONFIG::gpsHeadingDegToInternalRad(static_cast<float>(
-        gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_DEG));
+    float gpsHeadingRad = CONFIG::gpsSensorHeadingDegToInternalRad(static_cast<float>(
+        gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_deg));
     float imuHeadingRad = drivetrain->getHeading();
 
     // Reject non-finite headings — fall back to config
@@ -314,8 +427,8 @@ static Eigen::Vector3f acquireInitialPose() {
     auto centerFromGps = [&](float headingRad) {
         const float cosT = std::cos(headingRad);
         const float sinT = std::sin(headingRad);
-        const float ox = CONFIG::GPS_OFFSET_M.x() * cosT - CONFIG::GPS_OFFSET_M.y() * sinT;
-        const float oy = CONFIG::GPS_OFFSET_M.x() * sinT + CONFIG::GPS_OFFSET_M.y() * cosT;
+        const float ox = CONFIG::GPS_OFFSET.x() * cosT - CONFIG::GPS_OFFSET.y() * sinT;
+        const float oy = CONFIG::GPS_OFFSET.x() * sinT + CONFIG::GPS_OFFSET.y() * cosT;
         return Eigen::Vector2f(lastX - ox, lastY - oy);
     };
 
@@ -352,22 +465,21 @@ static void localizationInit() {
     std::vector<SensorModel*> sensors;
 
     static DistanceSensorModel distLeft(
-        CONFIG::MCL_LEFT_DISTANCE_PORT,  CONFIG::DIST_LEFT_OFFSET_M,
-        static_cast<float>(CONFIG::MCL_LEFT_DISTANCE_WEIGHT));
+        CONFIG::MCL_LEFT_DISTANCE_PORT,  CONFIG::DIST_LEFT_OFFSET,
+        static_cast<float>(CONFIG::MCL_LEFT_DISTANCE_WEIGHT),
+        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distLeft");
     static DistanceSensorModel distRight(
-        CONFIG::MCL_RIGHT_DISTANCE_PORT, CONFIG::DIST_RIGHT_OFFSET_M,
-        static_cast<float>(CONFIG::MCL_RIGHT_DISTANCE_WEIGHT));
+        CONFIG::MCL_RIGHT_DISTANCE_PORT, CONFIG::DIST_RIGHT_OFFSET,
+        static_cast<float>(CONFIG::MCL_RIGHT_DISTANCE_WEIGHT),
+        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distRight");
     static DistanceSensorModel distFront(
-        CONFIG::MCL_FRONT_DISTANCE_PORT, CONFIG::DIST_FRONT_OFFSET_M,
-        static_cast<float>(CONFIG::MCL_FRONT_DISTANCE_WEIGHT));
+        CONFIG::MCL_FRONT_DISTANCE_PORT, CONFIG::DIST_FRONT_OFFSET,
+        static_cast<float>(CONFIG::MCL_FRONT_DISTANCE_WEIGHT),
+        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distFront");
     static DistanceSensorModel distBack(
-        CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::DIST_BACK_OFFSET_M,
-        static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT));
-    static GpsSensorModel gpsSensor(
-        CONFIG::MCL_GPS_PORT,
-        static_cast<float>(CONFIG::MCL_GPS_HEADING_OFFSET_DEG),
-        CONFIG::MCL_GPS_OFFSET_X_M,
-        CONFIG::MCL_GPS_OFFSET_Y_M);
+        CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::DIST_BACK_OFFSET,
+        static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT),
+        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distBack");
 
     if (CONFIG::MCL_ENABLE_DISTANCE_SENSORS) {
         if (CONFIG::MCL_ENABLE_LEFT_DISTANCE_SENSOR)  sensors.push_back(&distLeft);
@@ -375,10 +487,11 @@ static void localizationInit() {
         if (CONFIG::MCL_ENABLE_FRONT_DISTANCE_SENSOR) sensors.push_back(&distFront);
         if (CONFIG::MCL_ENABLE_BACK_DISTANCE_SENSOR)  sensors.push_back(&distBack);
     }
-    sensors.push_back(&gpsSensor);
 
     auto predictionFn = [&]() -> Eigen::Vector2f {
-        return drivetrain->consumePendingDisplacement();
+        Eigen::Vector2f proposal = drivetrain->consumePendingFwdOnlyDisplacement();
+        drivetrain->consumePendingDisplacement();
+        return proposal;
     };
     auto angleFn = [&]() -> QAngle {
         return QAngle(drivetrain->getHeading());
@@ -386,6 +499,8 @@ static void localizationInit() {
 
     Eigen::Vector3f startPose = acquireInitialPose();
     drivetrain->syncLocalizationReference(startPose);
+    combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
+    combinedPose = startPose;
 
     renderInitStage(0.90f, "Init localization", "Starting filter...");
 
@@ -412,10 +527,10 @@ static void localizationInit() {
     }
     std::printf("[LOC_CONFIG] Start Pose: (%.3f, %.3f, %.3f rad)\n",
         startPose.x(), startPose.y(), startPose.z());
-    std::printf("[LOC_CONFIG] GPS Error Threshold: %.3f m\n", CONFIG::GPS_ERROR_THRESHOLD_M);
+    std::printf("[LOC_CONFIG] GPS Error Threshold (UI/startup only): %.3f in\n", CONFIG::GPS_ERROR_THRESHOLD_in);
     std::printf("[LOC_CONFIG] Distance Sensors Disabled: %s\n",
         CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING ? "YES" : "NO");
-    std::printf("[LOC_CONFIG] Active Sensors: %zu\n", sensors.size());
+    std::printf("[LOC_CONFIG] Active MCL Sensors (distance-only): %zu\n", sensors.size());
     std::printf("[LOC_CONFIG] ═════════════════════════════════════════════════\n\n");
 
     particleFilter = new ParticleFilter(
@@ -424,7 +539,10 @@ static void localizationInit() {
         CONFIG::NUM_PARTICLES);
 
     poseSource = [&]() -> Eigen::Vector3f {
-        return particleFilter->getPrediction();
+        return LocMath::isFinitePose(combinedPose)
+            ? combinedPose
+            : (drivetrain ? drivetrain->getOdomPose()
+                          : Eigen::Vector3f(0.0f, 0.0f, 0.0f));
     };
 }
 
@@ -433,6 +551,14 @@ static void localizationInit() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void buildAutonCommand() {
+    if (autonCommand) {
+        if (autonCommand->isScheduled()) {
+            autonCommand->cancel();
+        }
+        delete autonCommand;
+        autonCommand = nullptr;
+    }
+
     AUTON    = AutonSelector::getAuton();
     ALLIANCE = AutonSelector::getAlliance();
 
@@ -457,6 +583,10 @@ void initialize() {
     // 2. Subsystems
     renderInitStage(0.10f, "Init subsystems", "Creating subsystem objects");
     subsystemInit();
+    renderInitStage(0.18f, "Init subsystems", "Calibrating IMU");
+    if (drivetrain) {
+        drivetrain->calibrateImu();
+    }
     uiGps = std::make_unique<pros::Gps>(CONFIG::MCL_GPS_PORT);
 
     // 3. Localization (includes GPS poll with inline screen updates)
@@ -494,6 +624,10 @@ void autonomous() {
 }
 
 void opcontrol() {
+    // Opcontrol may re-enter after disable/enable cycles; reset scheduler
+    // state to avoid duplicated trigger bindings and stale commands.
+    CommandScheduler::reset();
+
     if (autonCommand && autonCommand->isScheduled()) {
         autonCommand->cancel();
     }
@@ -503,45 +637,49 @@ void opcontrol() {
 
     // ── Trigger bindings ────────────────────────────────────────────────
 
-    CommandScheduler::addTrigger(
-        Trigger([&]() { return master.get_digital(DIGITAL_R1); })
-            .whileTrue(new IntakeSpinCommand(intakes, 127)));
+    Trigger r1Trigger([&]() { return master.get_digital(DIGITAL_R1); });
+    r1Trigger.whileTrue(new IntakeSpinCommand(intakes, 127));
+    CommandScheduler::addTrigger(std::move(r1Trigger));
 
-    CommandScheduler::addTrigger(
-        Trigger([&]() { return master.get_digital(DIGITAL_R2); })
-            .whileTrue(new IntakeSpinCommand(intakes, -127)));
+    Trigger r2Trigger([&]() { return master.get_digital(DIGITAL_R2); });
+    r2Trigger.whileTrue(new IntakeSpinCommand(intakes, -127));
+    CommandScheduler::addTrigger(std::move(r2Trigger));
 
-    CommandScheduler::addTrigger(
-        Trigger([&]() { return master.get_digital(DIGITAL_L1); })
-            .onTrue(shared::toggleTongue(solenoids)));
+    Trigger l1Trigger([&]() { return master.get_digital(DIGITAL_L1); });
+    l1Trigger.onTrue(shared::toggleTongue(solenoids));
+    CommandScheduler::addTrigger(std::move(l1Trigger));
 
-    CommandScheduler::addTrigger(
-        Trigger([&]() { return master.get_digital(DIGITAL_L2); })
-            .onTrue(shared::toggleWing(solenoids)));
+    Trigger l2Trigger([&]() { return master.get_digital(DIGITAL_L2); });
+    l2Trigger.onTrue(shared::toggleWing(solenoids));
+    CommandScheduler::addTrigger(std::move(l2Trigger));
 
-    CommandScheduler::addTrigger(
-        Trigger([&]() { return master.get_digital(DIGITAL_A); })
-            .onTrue(shared::toggleSelect1(solenoids)));
+    Trigger aTrigger([&]() { return master.get_digital(DIGITAL_A); });
+    aTrigger.onTrue(shared::toggleSelect1(solenoids));
+    CommandScheduler::addTrigger(std::move(aTrigger));
 
-    CommandScheduler::addTrigger(
-        Trigger([&]() { return master.get_digital(DIGITAL_B); })
-            .onTrue(shared::toggleSelect2(solenoids)));
+    Trigger bTrigger([&]() { return master.get_digital(DIGITAL_B); });
+    bTrigger.onTrue(shared::toggleSelect2(solenoids));
+    CommandScheduler::addTrigger(std::move(bTrigger));
 
     if (AUTON == Auton::SKILLS && autonCommand) {
-        CommandScheduler::schedule(
-            autonCommand->until([&]() {
-                return partner.get_digital(DIGITAL_RIGHT);
-            }));
+        CommandScheduler::schedule(autonCommand);
     }
 
     while (true) {
+        if (AUTON == Auton::SKILLS && autonCommand && autonCommand->isScheduled() &&
+            partner.get_digital(DIGITAL_RIGHT)) {
+            autonCommand->cancel();
+        }
+
         float forward = static_cast<float>(
             master.get_analog(ANALOG_LEFT_Y));
         float turn = static_cast<float>(
             master.get_analog(ANALOG_RIGHT_X));
 
         if (drivetrain->getCurrentCommand() == nullptr) {
-            drivetrain->arcade(forward, turn);
+            drivetrain->driverArcade(forward, turn);
+        } else {
+            drivetrain->resetDriverAssistState();
         }
 
         pros::delay(20);

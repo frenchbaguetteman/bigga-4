@@ -10,12 +10,21 @@
 #include "utils/utils.h"
 #include "utils/motor.h"
 #include "utils/localization_math.h"
+#include <algorithm>
 #include <cmath>
 
 namespace {
 inline float normalizeAngleRad(float a) {
     return std::atan2(std::sin(a), std::cos(a));
 }
+}
+
+float Drivetrain::joystickCurve(float input, float t, float deadzone) {
+    if (std::fabs(input) < deadzone) return 0.0f;
+    if (t == 0.0f) return input;
+    const float expNeg = std::exp(-t / 10.0f);
+    const float expTerm = std::exp((std::fabs(input) - 127.0f) / 10.0f);
+    return (expNeg + expTerm * (1.0f - expNeg)) * input;
 }
 
 // ── Construction ────────────────────────────────────────────────────────────
@@ -42,7 +51,15 @@ Drivetrain::Drivetrain()
         m_horizontalTracking->reset_position();
     }
 
+    if constexpr (CONFIG::VERTICAL_TRACKING_PORT == 0) {
+        std::printf("[ODOM] WARN: vertical tracking wheel disabled; using drive-encoder fallback\n");
+    }
+    if constexpr (CONFIG::HORIZONTAL_TRACKING_PORT == 0) {
+        std::printf("[ODOM] WARN: horizontal tracking wheel disabled; lateral odom = 0\n");
+    }
+
     syncOdometryState();
+    resetDriverAssistState();
 }
 
 // ── Periodic ────────────────────────────────────────────────────────────────
@@ -68,15 +85,74 @@ void Drivetrain::arcade(float forward, float turn) {
     m_right.move(motorUtil::clampVoltage(right));
 }
 
+void Drivetrain::driverArcade(float forwardInput, float turnInput) {
+    const bool sticksActive = std::fabs(forwardInput) >= m_activeBrakeStickDeadband ||
+                              std::fabs(turnInput) >= m_activeBrakeStickDeadband;
+
+    if (sticksActive) {
+        m_activeBrakeWasDriving = true;
+        m_activeBrakeLeftTargetDeg = leftMotorPositionDeg();
+        m_activeBrakeRightTargetDeg = rightMotorPositionDeg();
+
+        const float curvedForward = joystickCurve(forwardInput, m_driverForwardCurve, m_driverDeadband);
+        const float curvedTurn = joystickCurve(turnInput, m_driverTurnCurve, m_driverDeadband);
+        arcade(curvedForward, curvedTurn);
+        return;
+    }
+
+    if (m_activeBrakeEnabled && m_activeBrakeWasDriving) {
+        applyActiveBrake();
+        return;
+    }
+
+    tankVoltage(0.0f, 0.0f);
+}
+
+void Drivetrain::resetDriverAssistState() {
+    m_activeBrakeWasDriving = false;
+    m_activeBrakeLeftTargetDeg = leftMotorPositionDeg();
+    m_activeBrakeRightTargetDeg = rightMotorPositionDeg();
+}
+
 void Drivetrain::stop() {
     m_left.brake();
     m_right.brake();
     m_lastSpeeds = {};
+    resetDriverAssistState();
 }
 
 void Drivetrain::tankVoltage(float left, float right) {
     m_left.move(motorUtil::clampVoltage(left));
     m_right.move(motorUtil::clampVoltage(right));
+}
+
+void Drivetrain::applyActiveBrake() {
+    const float leftError = m_activeBrakeLeftTargetDeg - leftMotorPositionDeg();
+    const float rightError = m_activeBrakeRightTargetDeg - rightMotorPositionDeg();
+
+    if (std::fabs(leftError) <= m_activeBrakePosDeadbandDeg &&
+        std::fabs(rightError) <= m_activeBrakePosDeadbandDeg) {
+        tankVoltage(0.0f, 0.0f);
+        return;
+    }
+
+    float leftOut = std::clamp(leftError * m_activeBrakeKp,
+                               -m_activeBrakePower, m_activeBrakePower);
+    float rightOut = std::clamp(rightError * m_activeBrakeKp,
+                                -m_activeBrakePower, m_activeBrakePower);
+
+    if (std::fabs(leftOut) < m_activeBrakeOutputDeadband) leftOut = 0.0f;
+    if (std::fabs(rightOut) < m_activeBrakeOutputDeadband) rightOut = 0.0f;
+
+    tankVoltage(leftOut, rightOut);
+}
+
+float Drivetrain::leftMotorPositionDeg() const {
+    return static_cast<float>(m_left.get_position());
+}
+
+float Drivetrain::rightMotorPositionDeg() const {
+    return static_cast<float>(m_right.get_position());
 }
 
 // ── Odometry ────────────────────────────────────────────────────────────────
@@ -86,21 +162,21 @@ float Drivetrain::rawForwardDistance() const {
         // Rotation sensor: centidegrees → radians → metres
         float centideg = static_cast<float>(m_verticalTracking->get_position());
         float radians  = centideg / 100.0f * static_cast<float>(M_PI) / 180.0f;
-        return radians * CONFIG::ODOM_RADIUS;
+        return radians * CONFIG::ODOM_RADIUS.getValue();
     }
     // Fallback: average of left/right drive motor encoder positions
     // MotorGroup::get_position() returns degrees (average of all motors)
     float leftDeg  = static_cast<float>(m_left.get_position());
     float rightDeg = static_cast<float>(m_right.get_position());
     float avgDeg   = (leftDeg + rightDeg) / 2.0f;
-    return (avgDeg / 360.0f) * 2.0f * static_cast<float>(M_PI) * CONFIG::DRIVE_RADIUS;
+    return (avgDeg / 360.0f) * 2.0f * static_cast<float>(M_PI) * CONFIG::DRIVE_RADIUS.getValue();
 }
 
 float Drivetrain::rawLateralDistance() const {
     if (m_horizontalTracking) {
         float centideg = static_cast<float>(m_horizontalTracking->get_position());
         float radians  = centideg / 100.0f * static_cast<float>(M_PI) / 180.0f;
-        return radians * CONFIG::ODOM_RADIUS;
+        return radians * CONFIG::ODOM_RADIUS.getValue();
     }
     return 0.0f;  // no horizontal tracking → no lateral correction
 }
@@ -114,6 +190,8 @@ void Drivetrain::updateOdometry() {
         !LocMath::isFinite(m_prevForwardDist) || !LocMath::isFinite(m_prevLateralDist) ||
         !LocMath::isFinite(m_prevHeading)) {
         std::printf("[ODOM] non-finite sensor/baseline, skipping tick\n");
+        m_lastStepDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+        m_lastStepFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
         syncOdometryState();
         return;
     }
@@ -123,7 +201,7 @@ void Drivetrain::updateOdometry() {
     float dTheta = normalizeAngleRad(heading - m_prevHeading);
 
     // Correct lateral for tracking-wheel arc during turns
-    float dLatCorrected = dLat - CONFIG::LATERAL_WHEEL_OFFSET_M * dTheta;
+    float dLatCorrected = dLat - CONFIG::LATERAL_WHEEL_OFFSET.getValue() * dTheta;
 
     m_prevForwardDist = fwd;
     m_prevLateralDist = lat;
@@ -135,13 +213,23 @@ void Drivetrain::updateOdometry() {
     float dx = dFwd * std::cos(midTheta) - dLatCorrected * std::sin(midTheta);
     float dy = dFwd * std::sin(midTheta) + dLatCorrected * std::cos(midTheta);
 
+    // Forward-only displacement (no lateral wheel) for MCL prediction
+    float dxFwdOnly = dFwd * std::cos(midTheta);
+    float dyFwdOnly = dFwd * std::sin(midTheta);
+
+    m_lastStepDisplacement = Eigen::Vector2f(dx, dy);
+    m_lastStepFwdOnlyDisplacement = Eigen::Vector2f(dxFwdOnly, dyFwdOnly);
+
     m_pose.x() += dx;
     m_pose.y() += dy;
     m_pose.z()  = heading;
 
     // Accumulate displacement for PF consumption
+    ++m_odomGeneration;
     m_pendingDisplacement.x() += dx;
     m_pendingDisplacement.y() += dy;
+    m_pendingFwdOnlyDisplacement.x() += dxFwdOnly;
+    m_pendingFwdOnlyDisplacement.y() += dyFwdOnly;
 }
 
 Eigen::Vector3f Drivetrain::getOdomPose() const { return m_pose; }
@@ -174,7 +262,12 @@ void Drivetrain::syncLocalizationReference(const Eigen::Vector3f& pose) {
     // 4. Explicit heading baseline (avoids IMU read-back lag)
     syncOdomBaselinesToCurrentSensors(safePose.z());
     // 5. Clear pending displacement
+    m_lastStepDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastStepFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
     m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_pendingFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastConsumedGeneration = m_odomGeneration;
+    m_lastConsumedFwdOnlyGeneration = m_odomGeneration;
 }
 
 void Drivetrain::setPose(const Eigen::Vector3f& pose) { setOdomPose(pose); }
@@ -196,6 +289,22 @@ float Drivetrain::getHeading() const {
     return h;
 }
 
+void Drivetrain::calibrateImu() {
+    std::printf("[IMU] Calibrating...\n");
+    m_imu.reset(true);
+    while (m_imu.is_calibrating()) {
+        pros::delay(10);
+    }
+    syncOdometryState();
+    m_lastStepDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastStepFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_pendingFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastConsumedGeneration = m_odomGeneration;
+    m_lastConsumedFwdOnlyGeneration = m_odomGeneration;
+    std::printf("[IMU] Ready\n");
+}
+
 void Drivetrain::resetHeading(float heading) {
     m_imu.set_heading(CONFIG::internalRadToGpsHeadingDeg(heading));
     syncOdometryState();
@@ -204,6 +313,13 @@ void Drivetrain::resetHeading(float heading) {
 }
 
 Eigen::Vector2f Drivetrain::consumePendingDisplacement() {
+    if (m_lastConsumedGeneration == m_odomGeneration) {
+        if (std::fabs(m_pendingDisplacement.x()) > 1e-6f ||
+            std::fabs(m_pendingDisplacement.y()) > 1e-6f) {
+            std::printf("[ODOM] WARN: displacement consumed without new odom generation\n");
+        }
+    }
+
     // Return displacement accumulated by updateOdometry() since last call
     Eigen::Vector2f d = m_pendingDisplacement;
     if (!LocMath::isFiniteVec2(d)) {
@@ -211,6 +327,18 @@ Eigen::Vector2f Drivetrain::consumePendingDisplacement() {
         d = Eigen::Vector2f(0.0f, 0.0f);
     }
     m_pendingDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastConsumedGeneration = m_odomGeneration;
+    return d;
+}
+
+Eigen::Vector2f Drivetrain::consumePendingFwdOnlyDisplacement() {
+    Eigen::Vector2f d = m_pendingFwdOnlyDisplacement;
+    if (!LocMath::isFiniteVec2(d)) {
+        std::printf("[ODOM] non-finite pending fwd-only displacement, zeroing\n");
+        d = Eigen::Vector2f(0.0f, 0.0f);
+    }
+    m_pendingFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastConsumedFwdOnlyGeneration = m_odomGeneration;
     return d;
 }
 
@@ -228,6 +356,8 @@ void Drivetrain::resetEncoders() {
     if (m_horizontalTracking) m_horizontalTracking->reset_position();
     m_left.tare_position();
     m_right.tare_position();
+    m_lastStepDisplacement = Eigen::Vector2f(0.0f, 0.0f);
+    m_lastStepFwdOnlyDisplacement = Eigen::Vector2f(0.0f, 0.0f);
     syncOdometryState();
 }
 

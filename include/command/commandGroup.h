@@ -20,6 +20,10 @@ public:
     SequentialCommandGroup(std::vector<Command*> cmds)
         : m_commands(std::move(cmds)) {}
 
+    ~SequentialCommandGroup() override {
+        for (Command* c : m_commands) delete c;
+    }
+
     void initialize() override {
         m_index = 0;
         if (!m_commands.empty()) m_commands[0]->initialize();
@@ -67,6 +71,10 @@ public:
         : m_commands(cmds) {}
     ParallelCommandGroup(std::vector<Command*> cmds)
         : m_commands(std::move(cmds)) {}
+
+    ~ParallelCommandGroup() override {
+        for (Command* c : m_commands) delete c;
+    }
 
     void initialize() override {
         m_finished.assign(m_commands.size(), false);
@@ -118,6 +126,10 @@ public:
     ParallelRaceGroup(std::vector<Command*> cmds)
         : m_commands(std::move(cmds)) {}
 
+    ~ParallelRaceGroup() override {
+        for (Command* c : m_commands) delete c;
+    }
+
     void initialize() override {
         m_done = false;
         for (auto* c : m_commands) c->initialize();
@@ -156,6 +168,8 @@ public:
     DeadlineCommand(Command* inner, float timeoutSec)
         : m_inner(inner), m_timeout(timeoutSec) {}
 
+    ~DeadlineCommand() override { delete m_inner; }
+
     void initialize() override { m_elapsed = 0; m_inner->initialize(); }
     void execute() override    { m_inner->execute(); m_elapsed += 0.01f; /* ~10 ms tick */ }
     void end(bool i) override  { m_inner->end(i); }
@@ -174,6 +188,8 @@ class ConditionalFinishCommand : public Command {
 public:
     ConditionalFinishCommand(Command* inner, std::function<bool()> cond)
         : m_inner(inner), m_cond(std::move(cond)) {}
+
+    ~ConditionalFinishCommand() override { delete m_inner; }
 
     void initialize() override { m_inner->initialize(); }
     void execute() override    { m_inner->execute(); }
