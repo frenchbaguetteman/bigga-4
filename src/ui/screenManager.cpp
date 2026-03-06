@@ -125,7 +125,7 @@ static void drawTab(const UITheme::Rect& r, const char* txt, bool active) {
         r,
         active ? UITheme::kPanel : UITheme::kPanelMuted,
         active ? UITheme::kBorderStrong : UITheme::kBorder,
-        active ? UITheme::kTeal : 0,
+        0,
         false
     );
     UITheme::printCenteredf(pros::E_TEXT_SMALL, r, r.y0 + 6,
@@ -137,7 +137,7 @@ static void drawMetricTile(const UITheme::Rect& r,
                            const char* value,
                            uint32_t accent,
                            uint32_t fill = UITheme::kPanelMuted) {
-    UITheme::drawPanel(r, fill, UITheme::kBorder, accent, false);
+    UITheme::drawPanel(r, fill, accent, 0, false);
     UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 8,
                         UITheme::kTextMuted, "%s", label);
     UITheme::printTextf(pros::E_TEXT_MEDIUM, r.x0 + 8, r.y0 + 24,
@@ -170,7 +170,7 @@ static void drawLocalizationSubtabs() {
             r,
             active ? UITheme::kPanel : UITheme::kPanelMuted,
             active ? UITheme::kBorderStrong : UITheme::kBorder,
-            active ? UITheme::kTeal : 0,
+            0,
             false);
         UITheme::printCenteredf(pros::E_TEXT_SMALL, r, r.y0 + 6,
                                 active ? UITheme::kText : UITheme::kTextMuted,
@@ -262,7 +262,7 @@ static void drawPidPage(const BrainScreen::RuntimeViewModel& vm) {
     const UITheme::Rect headCard = UITheme::makeRect(168, UITheme::kContentY + 8, 144, 48);
     const UITheme::Rect modeCard = UITheme::makeRect(324, UITheme::kContentY + 8, 144, 48);
     const UITheme::Rect graphPanel = UITheme::makeRect(12, UITheme::kContentY + 66, 456, 162);
-    const UITheme::Rect graphArea = UITheme::makeRect(graphPanel.x0 + 10, graphPanel.y0 + 24, 436, 128);
+    const UITheme::Rect graphArea = UITheme::makeRect(graphPanel.x0 + 10, graphPanel.y0 + 30, 436, 122);
 
     char errBuf[24];
     char headBuf[24];
@@ -270,14 +270,14 @@ static void drawPidPage(const BrainScreen::RuntimeViewModel& vm) {
     std::snprintf(headBuf, sizeof(headBuf), "%+.2f deg", headingErrDeg);
 
     drawMetricTile(errCard, "POSITION DELTA", errBuf, UITheme::kRed);
-    drawMetricTile(headCard, "HEADING DELTA", headBuf, UITheme::kCyan);
+    drawMetricTile(headCard, "HEADING DELTA", headBuf, UITheme::kBlue);
     drawMetricTile(modeCard, "MODE", "Tracking Proxy", UITheme::kAmber);
 
-    UITheme::drawPanel(graphPanel, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kTeal);
+    UITheme::drawPanel(graphPanel, UITheme::kPanel, UITheme::kBorderStrong, 0);
     UITheme::printTextf(pros::E_TEXT_SMALL, graphPanel.x0 + 12, graphPanel.y0 + 8,
                         UITheme::kTextMuted, "PID HISTORY");
     UITheme::printTextf(pros::E_TEXT_SMALL, graphPanel.x1 - 120, graphPanel.y0 + 8,
-                        UITheme::kTextSoft, "Red=pos  Cyan=head");
+                        UITheme::kTextSoft, "Red=pos  Blue=head");
     PIDGraphUI::draw(graphArea.x0, graphArea.y0, graphArea.x1, graphArea.y1);
 }
 
@@ -289,7 +289,7 @@ static void drawPathPage(const BrainScreen::RuntimeViewModel& vm) {
     const UITheme::Rect prep = UITheme::makeRect(12, UITheme::kContentY + 114, 456, 89);
 
     UITheme::drawPanel(route, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kAmber);
-    UITheme::drawPanel(brief, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kTeal);
+    UITheme::drawPanel(brief, UITheme::kPanel, UITheme::kBorderStrong, 0);
     UITheme::drawPanel(prep, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kBlue);
 
     UITheme::printTextf(pros::E_TEXT_SMALL, route.x0 + 12, route.y0 + 10,
@@ -321,7 +321,7 @@ static void drawPathPage(const BrainScreen::RuntimeViewModel& vm) {
                         UITheme::kTextMuted, "ROUTING POSTURE");
     drawMetricTile(UITheme::makeRect(prep.x0 + 12, prep.y0 + 26, 136, 42), "POSE X", xBuf, UITheme::kAmber);
     drawMetricTile(UITheme::makeRect(prep.x0 + 160, prep.y0 + 26, 136, 42), "POSE Y", yBuf, UITheme::kBlue);
-    drawMetricTile(UITheme::makeRect(prep.x0 + 308, prep.y0 + 26, 136, 42), "HEADING", hBuf, UITheme::kTeal);
+    drawMetricTile(UITheme::makeRect(prep.x0 + 308, prep.y0 + 26, 136, 42), "HEADING", hBuf, UITheme::kGreen);
     UITheme::printTextf(pros::E_TEXT_SMALL, prep.x0 + 12, prep.y1 - 14,
                         UITheme::kTextSoft, "Use LOCAL, PID, and GPS tabs for live verification.");
 }
@@ -347,7 +347,7 @@ static void drawGpsPage(const BrainScreen::RuntimeViewModel& vm) {
 
     UITheme::drawPanel(raw, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kBlue);
     UITheme::drawPanel(delta, UITheme::kPanel, UITheme::kBorderStrong, driftAccent(drift));
-    UITheme::drawPanel(fused, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kTeal);
+    UITheme::drawPanel(fused, UITheme::kPanel, UITheme::kBorderStrong, 0);
 
     UITheme::printTextf(pros::E_TEXT_SMALL, raw.x0 + 12, raw.y0 + 10,
                         UITheme::kTextMuted, "RAW GPS");

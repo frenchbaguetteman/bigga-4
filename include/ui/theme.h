@@ -122,8 +122,8 @@ inline void drawPanel(const Rect& r,
     Rect c = clampRect(r);
     if (shadow) drawShadow(c);
     fillRect(c, fill);
-    if (accent != 0 && height(c) >= 4) {
-        fillRect(Rect{c.x0, c.y0, c.x1, std::min(c.y0 + 3, c.y1)}, accent);
+    if (accent != 0 && height(c) >= 8) {
+        fillRect(Rect{c.x0 + 1, c.y0 + 1, c.x1 - 1, std::min(c.y0 + 2, c.y1 - 1)}, accent);
     }
     outlineRect(c, border);
 }

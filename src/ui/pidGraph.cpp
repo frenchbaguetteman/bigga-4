@@ -20,7 +20,7 @@ static constexpr uint32_t FRAME = UITheme::kBorderStrong;
 static constexpr uint32_t GRID = 0x0022313F;
 static constexpr uint32_t ZERO = 0x00384B59;
 static constexpr uint32_t ERR_COL = UITheme::kRed;
-static constexpr uint32_t OUT_COL = UITheme::kCyan;
+static constexpr uint32_t OUT_COL = UITheme::kBlue;
 static constexpr uint32_t TXT = UITheme::kText;
 static constexpr uint32_t LABEL = UITheme::kTextMuted;
 
@@ -98,6 +98,7 @@ void draw(int x0, int y0, int x1, int y1) {
                           sx2, toY(outputBuf[idxNewestBack(i + 1)]), OUT_COL);
     }
 
+    UITheme::fillRect(UITheme::Rect{x0 + 4, y0 + 3, x0 + 72, y0 + 14}, BG);
     UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y0 + 5, ERR_COL, "POS");
     UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 34, y0 + 5, OUT_COL, "HEAD");
     UITheme::printTextf(pros::E_TEXT_SMALL, x1 - 56, y0 + 5, TXT, "x%.1f", maxVal);

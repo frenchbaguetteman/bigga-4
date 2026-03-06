@@ -27,7 +27,7 @@ static constexpr uint32_t COL_FIELD = 0x00141D28;
 static constexpr uint32_t COL_GRID = 0x00253444;
 static constexpr uint32_t COL_FIELD_BORDER = UITheme::kBorderStrong;
 static constexpr uint32_t COL_TRAIL_HOT = UITheme::kAmber;
-static constexpr uint32_t COL_TRAIL_COOL = UITheme::kCyan;
+static constexpr uint32_t COL_TRAIL_COOL = UITheme::kBlue;
 
 static constexpr int TRAIL_MAX = 300;
 struct TrailPoint { int px; int py; };
@@ -101,7 +101,7 @@ static SourceSpec sourceSpec(const BrainScreen::RuntimeViewModel& vm, Localizati
                     vm.gpsPoseValid ? "Absolute GPS pose" : "No valid GPS reading"};
         case LocalizationView::PureMcl:
             return {"PURE MCL", vm.pureMclPose, finitePose(vm.pureMclPose),
-                    UITheme::kCyan, "Particle-filter estimate"};
+                    UITheme::kBlue, "Particle-filter estimate"};
         case LocalizationView::Combined:
         default:
             return {"COMBINED", vm.combinedPose, finitePose(vm.combinedPose),
@@ -148,7 +148,7 @@ static void drawTrail() {
 }
 
 static void drawPoseCard(const UITheme::Rect& r, const SourceSpec& spec) {
-    UITheme::drawPanel(r, UITheme::kPanelMuted, UITheme::kBorder, spec.accent, false);
+    UITheme::drawPanel(r, UITheme::kPanelMuted, spec.accent, 0, false);
     UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 8, UITheme::kTextMuted, "%s", spec.label);
 
     if (!spec.valid) {
@@ -171,7 +171,7 @@ static void drawInfoTile(const UITheme::Rect& r,
                          const char* label,
                          const char* value,
                          uint32_t accent) {
-    UITheme::drawPanel(r, UITheme::kPanelMuted, UITheme::kBorder, accent, false);
+    UITheme::drawPanel(r, UITheme::kPanelMuted, accent, 0, false);
     UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 6,
                         UITheme::kTextMuted, "%s", label);
     UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 20,
@@ -181,7 +181,7 @@ static void drawInfoTile(const UITheme::Rect& r,
 static void drawSensorTile(const UITheme::Rect& r,
                            const BrainScreen::RuntimeViewModel::DistanceSensorViewModel& sensor,
                            uint32_t accent) {
-    UITheme::drawPanel(r, UITheme::kPanelMuted, UITheme::kBorder, accent, false);
+    UITheme::drawPanel(r, UITheme::kPanelMuted, accent, 0, false);
     UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 6,
                         UITheme::kTextMuted, "%s", sensor.label.c_str());
     if (!sensor.valid) {
@@ -265,7 +265,7 @@ static void drawOdomDetails(const BrainScreen::RuntimeViewModel& vm) {
 
     drawInfoTile(UITheme::makeRect(x, y, w, h), "COMB dX", dxBuf, UITheme::kAmber);
     drawInfoTile(UITheme::makeRect(x + w + gap, y, w, h), "COMB dY", dyBuf, UITheme::kBlue);
-    drawInfoTile(UITheme::makeRect(x, y + h + gap, w, h), "COMB dH", dhBuf, UITheme::kCyan);
+    drawInfoTile(UITheme::makeRect(x, y + h + gap, w, h), "COMB dH", dhBuf, UITheme::kBlue);
     drawInfoTile(UITheme::makeRect(x + w + gap, y + h + gap, w, h),
                  "CORR MAG", magBuf, UITheme::kGreen);
 }
@@ -307,7 +307,7 @@ static void drawGpsDetails(const BrainScreen::RuntimeViewModel& vm) {
 
     drawInfoTile(UITheme::makeRect(x, y, w, h), "COMB dX", dxBuf, UITheme::kAmber);
     drawInfoTile(UITheme::makeRect(x + w + gap, y, w, h), "COMB dY", dyBuf, UITheme::kBlue);
-    drawInfoTile(UITheme::makeRect(x, y + h + gap, w, h), "COMB dH", dhBuf, UITheme::kCyan);
+    drawInfoTile(UITheme::makeRect(x, y + h + gap, w, h), "COMB dH", dhBuf, UITheme::kBlue);
     drawInfoTile(UITheme::makeRect(x + w + gap, y + h + gap, w, h), "GPS ERR", errBuf, UITheme::kBlue);
 }
 
@@ -342,7 +342,7 @@ static void drawCombinedDetails(const BrainScreen::RuntimeViewModel& vm) {
     drawInfoTile(UITheme::makeRect(x, y, w, h), "ODOM dX", odxBuf, UITheme::kAmber);
     drawInfoTile(UITheme::makeRect(x + w + gap, y, w, h), "ODOM dY", odyBuf, UITheme::kBlue);
     drawInfoTile(UITheme::makeRect(x, y + h + gap, w, h), "GPS DRIFT", gpsBuf, UITheme::kBlue);
-    drawInfoTile(UITheme::makeRect(x + w + gap, y + h + gap, w, h), "MCL DRIFT", mclBuf, UITheme::kCyan);
+    drawInfoTile(UITheme::makeRect(x + w + gap, y + h + gap, w, h), "MCL DRIFT", mclBuf, UITheme::kBlue);
 }
 
 static void drawMclDetails(const BrainScreen::RuntimeViewModel& vm) {
@@ -372,10 +372,10 @@ static void drawMclDetails(const BrainScreen::RuntimeViewModel& vm) {
     drawInfoTile(UITheme::makeRect(x, y, w, h), "USED/ACT", usedBuf, UITheme::kTeal);
     drawInfoTile(UITheme::makeRect(x + w + gap, y, w, h), "ESS", essBuf, UITheme::kAmber);
 
-    drawSensorTile(UITheme::makeRect(x, y + h + gap, w, h), vm.distanceSensors[0], UITheme::kCyan);
-    drawSensorTile(UITheme::makeRect(x + w + gap, y + h + gap, w, h), vm.distanceSensors[1], UITheme::kCyan);
-    drawSensorTile(UITheme::makeRect(x, y + 2 * (h + gap), w, h), vm.distanceSensors[2], UITheme::kCyan);
-    drawSensorTile(UITheme::makeRect(x + w + gap, y + 2 * (h + gap), w, h), vm.distanceSensors[3], UITheme::kCyan);
+    drawSensorTile(UITheme::makeRect(x, y + h + gap, w, h), vm.distanceSensors[0], UITheme::kBlue);
+    drawSensorTile(UITheme::makeRect(x + w + gap, y + h + gap, w, h), vm.distanceSensors[1], UITheme::kBlue);
+    drawSensorTile(UITheme::makeRect(x, y + 2 * (h + gap), w, h), vm.distanceSensors[2], UITheme::kBlue);
+    drawSensorTile(UITheme::makeRect(x + w + gap, y + 2 * (h + gap), w, h), vm.distanceSensors[3], UITheme::kBlue);
 }
 
 }  // namespace
