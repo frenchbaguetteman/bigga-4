@@ -195,11 +195,71 @@ private:
             considerWall(t, sx + t * dx);
         }
 
+        if (CONFIG::MCL_ENABLE_FIELD_OBSTACLES) {
+            for (const auto& obstacle : CONFIG::MCL_FIELD_OBSTACLES) {
+                const float candidate = rayAabbDistance(
+                    sx,
+                    sy,
+                    dx,
+                    dy,
+                    obstacle.minX,
+                    obstacle.maxX,
+                    obstacle.minY,
+                    obstacle.maxY);
+                if (LocMath::isFinite(candidate) && candidate > 0.001f) {
+                    minDist = std::min(minDist, candidate);
+                }
+            }
+        }
+
         if (!LocMath::isFinite(minDist) ||
             minDist > CONFIG::MCL_DISTANCE_MAX_RANGE.convert(meter)) {
             return std::nullopt;
         }
 
         return minDist;
+    }
+
+    static float rayAabbDistance(float sx,
+                                 float sy,
+                                 float dx,
+                                 float dy,
+                                 float minX,
+                                 float maxX,
+                                 float minY,
+                                 float maxY) {
+        constexpr float kEps = 1e-6f;
+        float tMin = 0.0f;
+        float tMax = std::numeric_limits<float>::infinity();
+
+        const auto slabIntersect = [&](float s,
+                                       float d,
+                                       float slabMin,
+                                       float slabMax,
+                                       float& ioMin,
+                                       float& ioMax) -> bool {
+            if (std::fabs(d) < kEps) {
+                return s >= slabMin && s <= slabMax;
+            }
+
+            float t1 = (slabMin - s) / d;
+            float t2 = (slabMax - s) / d;
+            if (t1 > t2) std::swap(t1, t2);
+            ioMin = std::max(ioMin, t1);
+            ioMax = std::min(ioMax, t2);
+            return ioMax >= ioMin;
+        };
+
+        if (!slabIntersect(sx, dx, minX, maxX, tMin, tMax)) {
+            return std::numeric_limits<float>::infinity();
+        }
+        if (!slabIntersect(sy, dy, minY, maxY, tMin, tMax)) {
+            return std::numeric_limits<float>::infinity();
+        }
+        if (tMax < 0.0f) {
+            return std::numeric_limits<float>::infinity();
+        }
+
+        return (tMin > 0.0f) ? tMin : tMax;
     }
 };

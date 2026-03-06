@@ -31,6 +31,7 @@
 #include "units/units.hpp"
 #include "feedback/pid.h"
 #include <utility>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -431,8 +432,25 @@ constexpr float LOC_GPS_CORRECTION_MAX_in             = 36.0f;
 constexpr float LOC_GPS_CORRECTION_STEP_in            = 0.25f;
 constexpr int   LOC_MCL_MIN_ACTIVE_SENSORS            = 3;
 constexpr float LOC_MCL_CORRECTION_MAX_in             = 18.0f;
-constexpr float LOC_MCL_CORRECTION_STEP_in            = 0.10f;
-constexpr float LOC_MCL_CORRECTION_JUMP_REJECT_in     = 8.0f;
+constexpr float LOC_MCL_CORRECTION_STEP_in            = 0.06f;
+constexpr float LOC_MCL_CORRECTION_JUMP_REJECT_in     = 3.5f;
+constexpr float LOC_MCL_MIN_ESS_RATIO                 = 0.22f;
+
+// Distance-model obstacles for the Push Back field composition.
+// Coordinates are in canonical field-frame metres (origin at field centre).
+struct FieldObstacle {
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+};
+
+constexpr bool MCL_ENABLE_FIELD_OBSTACLES = true;
+inline constexpr std::array<FieldObstacle, 3> MCL_FIELD_OBSTACLES{{
+    {-0.3048f,  0.3048f, -0.3048f,  0.3048f},  // central field block (24 in square)
+    {-1.3716f, -1.0668f, -0.3048f,  0.3048f},  // west lane obstruction
+    { 1.0668f,  1.3716f, -0.3048f,  0.3048f},  // east lane obstruction
+}};
 
 inline constexpr QLength LOC_FUSION_STILLNESS_DEADBAND =
     LOC_FUSION_STILLNESS_DEADBAND_in * inch;

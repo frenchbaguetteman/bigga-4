@@ -178,8 +178,12 @@ static Eigen::Vector3f computeCombinedPose() {
             pf.y() - odom.y());
         const float correctionJump = (pfCorrection - combinedCorrection).norm();
 
+        const double minEss = static_cast<double>(CONFIG::NUM_PARTICLES) *
+            static_cast<double>(CONFIG::LOC_MCL_MIN_ESS_RATIO);
+
         if (LocMath::isFinitePose(pf) &&
             particleFilter->lastUpdateUsedMeasurements() &&
+            particleFilter->getLastEss() >= minEss &&
             (particleFilter->getLastActiveAbsoluteSensorCount() > 0 ||
              particleFilter->getLastActiveSensorCount() >=
                 static_cast<size_t>(CONFIG::LOC_MCL_MIN_ACTIVE_SENSORS)) &&
