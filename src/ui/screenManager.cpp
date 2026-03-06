@@ -3,6 +3,7 @@
 #include "ui/autonSelector.h"
 #include "ui/display.h"
 #include "ui/pidGraph.h"
+#include "ui/theme.h"
 #include "pros/screen.hpp"
 #include "pros/rtos.hpp"
 
@@ -15,50 +16,32 @@ namespace ScreenManagerUI {
 
 namespace {
 
-// ── Page enum ───────────────────────────────────────────────────────────────
 enum class Page {
-    SELECT,   // auton/alliance selector
-    ODOM,     // field map + 4 pose cards
-    PID,      // PID error/output graph
-    PATH,     // path / auton info
-    GPS       // raw GPS data + deltas
+    SELECT,
+    ODOM,
+    PID,
+    PATH,
+    GPS
 };
 
-static constexpr int PAGE_COUNT = 5;
+static constexpr UITheme::Rect BRAND_CARD {8, 4, 84, 21};
+static constexpr UITheme::Rect TAB_SELECT {96, 4, 168, 21};
+static constexpr UITheme::Rect TAB_ODOM   {172, 4, 244, 21};
+static constexpr UITheme::Rect TAB_PID    {248, 4, 320, 21};
+static constexpr UITheme::Rect TAB_PATH   {324, 4, 396, 21};
+static constexpr UITheme::Rect TAB_GPS    {400, 4, 472, 21};
 
-// ── Layout constants ────────────────────────────────────────────────────────
-// Tab bar lives in y = 0..25.  Content area is y = 28..239.
-static constexpr int TAB_H   = 24;
-static constexpr int TAB_Y0  = 0;
-static constexpr int TAB_Y1  = TAB_H;
-static constexpr int CONTENT_Y = TAB_H + 4;   // 28
-
-struct Rect { int x0, y0, x1, y1; };
-
-// 5 evenly-spaced tabs across 480 px
-static constexpr int TAB_W = 480 / PAGE_COUNT;  // 96
-static constexpr Rect TAB_SELECT {0 * TAB_W, TAB_Y0, 1 * TAB_W - 1, TAB_Y1};
-static constexpr Rect TAB_ODOM   {1 * TAB_W, TAB_Y0, 2 * TAB_W - 1, TAB_Y1};
-static constexpr Rect TAB_PID    {2 * TAB_W, TAB_Y0, 3 * TAB_W - 1, TAB_Y1};
-static constexpr Rect TAB_PATH   {3 * TAB_W, TAB_Y0, 4 * TAB_W - 1, TAB_Y1};
-static constexpr Rect TAB_GPS    {4 * TAB_W, TAB_Y0, 5 * TAB_W - 1, TAB_Y1};
-
-// SELECT page controls (inside content area)
-static constexpr int BTN_Y0 = CONTENT_Y + 24;
-static constexpr int BTN_Y1 = BTN_Y0 + 28;
-static constexpr Rect RED_BTN    {16,  BTN_Y0,  96, BTN_Y1};
-static constexpr Rect BLUE_BTN   {104, BTN_Y0, 184, BTN_Y1};
-static constexpr Rect SKILLS_BTN {192, BTN_Y0, 292, BTN_Y1};
-static constexpr Rect PREV_BTN   {308, BTN_Y0, 354, BTN_Y1};
-static constexpr Rect NEXT_BTN   {360, BTN_Y0, 406, BTN_Y1};
+static constexpr UITheme::Rect RED_BTN    {24, 70, 105, 95};
+static constexpr UITheme::Rect BLUE_BTN   {114, 70, 195, 95};
+static constexpr UITheme::Rect PREV_BTN   {307, 58, 374, 87};
+static constexpr UITheme::Rect NEXT_BTN   {387, 58, 454, 87};
+static constexpr UITheme::Rect SKILLS_BTN {307, 98, 454, 121};
 
 static Page activePage = Page::SELECT;
 static Page prevRenderedPage = Page::SELECT;
 static uint32_t lastTouchMs = 0;
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-static bool inside(const Rect& r, int x, int y) {
+static bool inside(const UITheme::Rect& r, int x, int y) {
     return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
 }
 
@@ -72,51 +55,81 @@ static float wrapDeg(float deg) {
     return deg;
 }
 
-static const char* safeStatus(const std::string& s) {
-    static char buf[44];
+static float mToIn(float m) {
+    return m * 39.3701f;
+}
+
+static const char* safeStatus(const std::string& s, int maxChars = 34) {
+    static char buf[48];
     if (s.empty()) {
-        std::snprintf(buf, sizeof(buf), "Status: --");
+        std::snprintf(buf, sizeof(buf), "Ready");
         return buf;
     }
-    std::snprintf(buf, sizeof(buf), "Status: %.34s", s.c_str());
+    std::snprintf(buf, sizeof(buf), "%.*s", maxChars, s.c_str());
     return buf;
 }
 
-static void clearContent() {
-    pros::screen::set_pen(0x00000000);
-    pros::screen::fill_rect(0, CONTENT_Y, 479, 239);
+static uint32_t allianceAccent(const std::string& alliance) {
+    return (alliance == "RED") ? UITheme::kRed : UITheme::kBlue;
 }
 
-static void drawTab(const Rect& r, const char* txt, bool active) {
-    uint32_t bg = active ? 0x00224466 : 0x00181818;
-    pros::screen::set_pen(bg);
-    pros::screen::fill_rect(r.x0, r.y0, r.x1, r.y1);
-    pros::screen::set_pen(active ? 0x00FFFFFF : 0x00555555);
-    pros::screen::draw_rect(r.x0, r.y0, r.x1, r.y1);
-    int textW = static_cast<int>(__builtin_strlen(txt)) * 7;  // approx
-    int cx = r.x0 + (r.x1 - r.x0 - textW) / 2;
-    pros::screen::set_pen(active ? 0x00FFFFFF : 0x00999999);
-    pros::screen::print(pros::E_TEXT_MEDIUM, cx, r.y0 + 5, "%s", txt);
+static uint32_t allianceFill(const std::string& alliance) {
+    return (alliance == "RED") ? UITheme::kRedDeep : UITheme::kBlueDeep;
 }
 
-static void drawButton(const Rect& r, const char* txt, uint32_t bg,
-                        bool highlight = false) {
-    pros::screen::set_pen(bg);
-    pros::screen::fill_rect(r.x0, r.y0, r.x1, r.y1);
-    pros::screen::set_pen(highlight ? 0x00FFFFFF : 0x00666666);
-    pros::screen::draw_rect(r.x0, r.y0, r.x1, r.y1);
-    pros::screen::set_pen(0x00FFFFFF);
-    int cx = r.x0 + (r.x1 - r.x0) / 2 -
-             static_cast<int>(__builtin_strlen(txt)) * 4;
-    pros::screen::print(pros::E_TEXT_MEDIUM, cx, r.y0 + 5, "%s", txt);
+static const char* routineMode(const std::string& auton) {
+    return (auton == "Skills") ? "Skills Run" : "Match Routine";
 }
 
-// ── Tab bar (always drawn) ──────────────────────────────────────────────────
+static const char* routineBadge(const std::string& auton) {
+    return (auton == "Skills") ? "SKILLS" : "MATCH";
+}
 
-static void drawTabBar() {
-    // black background behind tabs
-    pros::screen::set_pen(0x00000000);
-    pros::screen::fill_rect(0, 0, 479, TAB_Y1);
+static const char* driftLabel(float driftIn) {
+    if (driftIn < 3.0f) return "Tight";
+    if (driftIn < 6.0f) return "Nominal";
+    return "Watch";
+}
+
+static uint32_t driftAccent(float driftIn) {
+    if (driftIn < 3.0f) return UITheme::kGreen;
+    if (driftIn < 6.0f) return UITheme::kAmber;
+    return UITheme::kRed;
+}
+
+static void drawTab(const UITheme::Rect& r, const char* txt, bool active) {
+    UITheme::drawPanel(
+        r,
+        active ? UITheme::kPanel : UITheme::kPanelMuted,
+        active ? UITheme::kBorderStrong : UITheme::kBorder,
+        active ? UITheme::kTeal : 0,
+        false
+    );
+    UITheme::printCenteredf(pros::E_TEXT_SMALL, r, r.y0 + 6,
+                            active ? UITheme::kText : UITheme::kTextMuted, "%s", txt);
+}
+
+static void drawMetricTile(const UITheme::Rect& r,
+                           const char* label,
+                           const char* value,
+                           uint32_t accent,
+                           uint32_t fill = UITheme::kPanelMuted) {
+    UITheme::drawPanel(r, fill, UITheme::kBorder, accent, false);
+    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 8,
+                        UITheme::kTextMuted, "%s", label);
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, r.x0 + 8, r.y0 + 24,
+                        UITheme::kText, "%s", value);
+}
+
+static void drawTopBar() {
+    UITheme::fillRect(UITheme::makeRect(0, 0, UITheme::kScreenW, UITheme::kTopBarH), UITheme::kBackgroundBand);
+    UITheme::drawDividerH(0, UITheme::kScreenW - 1, UITheme::kTopBarH - 1, UITheme::kBorderStrong);
+
+    UITheme::drawPanel(BRAND_CARD, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kAmber, false);
+    UITheme::printTextf(pros::E_TEXT_SMALL, BRAND_CARD.x0 + 8, BRAND_CARD.y0 + 3,
+                        UITheme::kTextMuted, "TEAM");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, BRAND_CARD.x0 + 8, BRAND_CARD.y0 + 11,
+                        UITheme::kText, "69580A");
 
     drawTab(TAB_SELECT, "SELECT", activePage == Page::SELECT);
     drawTab(TAB_ODOM,   "ODOM",   activePage == Page::ODOM);
@@ -125,39 +138,72 @@ static void drawTabBar() {
     drawTab(TAB_GPS,    "GPS",    activePage == Page::GPS);
 }
 
-// ── SELECT page ─────────────────────────────────────────────────────────────
-
 static void drawSelectPage(const BrainScreen::RuntimeViewModel& vm) {
-    clearContent();
+    UITheme::drawContentBackdrop();
 
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, CONTENT_Y + 2, "Auton Selector");
+    const UITheme::Rect hero = UITheme::makeRect(12, UITheme::kContentY + 8, 272, 100);
+    const UITheme::Rect nav = UITheme::makeRect(296, UITheme::kContentY + 8, 172, 100);
+    const UITheme::Rect live = UITheme::makeRect(12, UITheme::kContentY + 118, 456, 85);
 
-    drawButton(RED_BTN,    "RED",    0x00700000, vm.alliance == "RED");
-    drawButton(BLUE_BTN,   "BLUE",   0x00000080, vm.alliance == "BLUE");
-    drawButton(SKILLS_BTN, "SKILLS", 0x00444444, vm.auton == "Skills");
+    const uint32_t allianceCol = allianceAccent(vm.alliance);
+    const uint32_t allianceBg = allianceFill(vm.alliance);
 
-    drawButton(PREV_BTN, "<", 0x002A2A2A);
-    drawButton(NEXT_BTN, ">", 0x002A2A2A);
+    UITheme::drawPanel(hero, UITheme::kPanelAlt, UITheme::kBorderStrong, allianceCol);
+    UITheme::drawPanel(nav, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kAmber);
+    UITheme::drawPanel(live, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kBlue);
 
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_LARGE, 16, BTN_Y1 + 10, "%s", vm.auton.c_str());
+    UITheme::printTextf(pros::E_TEXT_SMALL, hero.x0 + 12, hero.y0 + 10,
+                        UITheme::kTextMuted, "MATCH SETUP");
+    UITheme::drawChip(UITheme::makeRect(hero.x1 - 82, hero.y0 + 8, 70, 20),
+                      vm.alliance.c_str(), allianceBg, allianceCol, UITheme::kText);
 
-    // Quick pose summary
-    pros::screen::set_pen(0x00888888);
-    float xi = vm.combinedPose.x() * 39.3701f;
-    float yi = vm.combinedPose.y() * 39.3701f;
-    float hd = radToDeg(vm.combinedPose.z());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, BTN_Y1 + 40,
-                        "Pose: x=%.1f in  y=%.1f in  h=%.1f deg", xi, yi, hd);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, BTN_Y1 + 58,
-                        "Alliance: %s   Auton: %s", vm.alliance.c_str(), vm.auton.c_str());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, BTN_Y1 + 76, "%s", safeStatus(vm.status));
+    UITheme::drawChip(RED_BTN, "RED",
+                      0x00401A1A,
+                      vm.alliance == "RED" ? UITheme::kRed : UITheme::kBorder,
+                      UITheme::kText);
+    UITheme::drawChip(BLUE_BTN, "BLUE",
+                      0x0015223D,
+                      vm.alliance == "BLUE" ? UITheme::kBlue : UITheme::kBorder,
+                      UITheme::kText);
+
+    UITheme::printTextf(pros::E_TEXT_LARGE, hero.x0 + 12, hero.y0 + 50,
+                        UITheme::kText, "%s", vm.auton.c_str());
+    UITheme::printTextf(pros::E_TEXT_SMALL, hero.x0 + 12, hero.y1 - 16,
+                        UITheme::kTextSoft, "%s", routineMode(vm.auton));
+
+    UITheme::printTextf(pros::E_TEXT_SMALL, nav.x0 + 12, nav.y0 + 10,
+                        UITheme::kTextMuted, "AUTON NAV");
+    UITheme::drawChip(PREV_BTN, "PREV", UITheme::kPanelMuted, UITheme::kBorderStrong, UITheme::kText);
+    UITheme::drawChip(NEXT_BTN, "NEXT", UITheme::kPanelMuted, UITheme::kBorderStrong, UITheme::kText);
+    UITheme::drawChip(SKILLS_BTN, "QUICK: SKILLS",
+                      vm.auton == "Skills" ? UITheme::kTealDeep : UITheme::kPanelMuted,
+                      vm.auton == "Skills" ? UITheme::kTeal : UITheme::kBorderStrong,
+                      UITheme::kText);
+    UITheme::printTextf(pros::E_TEXT_SMALL, nav.x0 + 12, nav.y1 - 16,
+                        UITheme::kTextSoft, "Tap tabs for diagnostics");
+
+    UITheme::printTextf(pros::E_TEXT_SMALL, live.x0 + 12, live.y0 + 10,
+                        UITheme::kTextMuted, "LIVE POSE");
+
+    char xBuf[24];
+    char yBuf[24];
+    char hBuf[24];
+    std::snprintf(xBuf, sizeof(xBuf), "%+.1f in", mToIn(vm.combinedPose.x()));
+    std::snprintf(yBuf, sizeof(yBuf), "%+.1f in", mToIn(vm.combinedPose.y()));
+    std::snprintf(hBuf, sizeof(hBuf), "%+.1f deg", radToDeg(vm.combinedPose.z()));
+
+    drawMetricTile(UITheme::makeRect(live.x0 + 12, live.y0 + 24, 134, 38), "X", xBuf, UITheme::kAmber);
+    drawMetricTile(UITheme::makeRect(live.x0 + 160, live.y0 + 24, 134, 38), "Y", yBuf, UITheme::kBlue);
+    drawMetricTile(UITheme::makeRect(live.x0 + 308, live.y0 + 24, 136, 38), "HEADING", hBuf, UITheme::kTeal);
+
+    UITheme::drawDividerH(live.x0 + 12, live.x1 - 12, live.y1 - 22, UITheme::kBorder);
+    UITheme::printTextf(pros::E_TEXT_SMALL, live.x0 + 12, live.y1 - 14,
+                        UITheme::kText, "%s", safeStatus(vm.status, 42));
 }
 
-// ── PID page ────────────────────────────────────────────────────────────────
-
 static void drawPidPage(const BrainScreen::RuntimeViewModel& vm) {
+    UITheme::drawContentBackdrop();
+
     double errIn = static_cast<double>(vm.combinedPose.x() - vm.pureOdomPose.x()) * 39.3701;
     double headingErrDeg = static_cast<double>(
         wrapDeg(radToDeg(vm.combinedPose.z() - vm.pureOdomPose.z())));
@@ -165,93 +211,139 @@ static void drawPidPage(const BrainScreen::RuntimeViewModel& vm) {
     if (!std::isfinite(errIn)) errIn = 0.0;
     if (!std::isfinite(headingErrDeg)) headingErrDeg = 0.0;
 
-    // PID monitor shows proxy tracking errors until direct PID telemetry is wired.
-    // Red = position error (in), Cyan = heading error (deg).
-    double err = errIn;
-    double out = headingErrDeg;
-    PIDGraphUI::addSample(err, out);
+    PIDGraphUI::addSample(errIn, headingErrDeg);
 
-    clearContent();
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, CONTENT_Y + 2, "PID Monitor (tracking)");
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, CONTENT_Y + 18,
-                        "ErrX: %+.2f in   ErrH: %+.2f deg", errIn, headingErrDeg);
-    PIDGraphUI::draw(6, CONTENT_Y + 36, 474, 236);
+    const UITheme::Rect errCard = UITheme::makeRect(12, UITheme::kContentY + 8, 144, 48);
+    const UITheme::Rect headCard = UITheme::makeRect(168, UITheme::kContentY + 8, 144, 48);
+    const UITheme::Rect modeCard = UITheme::makeRect(324, UITheme::kContentY + 8, 144, 48);
+    const UITheme::Rect graphPanel = UITheme::makeRect(12, UITheme::kContentY + 66, 456, 162);
+    const UITheme::Rect graphArea = UITheme::makeRect(graphPanel.x0 + 10, graphPanel.y0 + 24, 436, 128);
+
+    char errBuf[24];
+    char headBuf[24];
+    std::snprintf(errBuf, sizeof(errBuf), "%+.2f in", errIn);
+    std::snprintf(headBuf, sizeof(headBuf), "%+.2f deg", headingErrDeg);
+
+    drawMetricTile(errCard, "POSITION DELTA", errBuf, UITheme::kRed);
+    drawMetricTile(headCard, "HEADING DELTA", headBuf, UITheme::kCyan);
+    drawMetricTile(modeCard, "MODE", "Tracking Proxy", UITheme::kAmber);
+
+    UITheme::drawPanel(graphPanel, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kTeal);
+    UITheme::printTextf(pros::E_TEXT_SMALL, graphPanel.x0 + 12, graphPanel.y0 + 8,
+                        UITheme::kTextMuted, "PID HISTORY");
+    UITheme::printTextf(pros::E_TEXT_SMALL, graphPanel.x1 - 120, graphPanel.y0 + 8,
+                        UITheme::kTextSoft, "Red=pos  Cyan=head");
+    PIDGraphUI::draw(graphArea.x0, graphArea.y0, graphArea.x1, graphArea.y1);
 }
-
-// ── PATH page ───────────────────────────────────────────────────────────────
 
 static void drawPathPage(const BrainScreen::RuntimeViewModel& vm) {
-    clearContent();
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, CONTENT_Y + 2, "Path Tool");
+    UITheme::drawContentBackdrop();
 
-    int y = CONTENT_Y + 26;
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y,      "Auton: %s", vm.auton.c_str());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 18, "Alliance: %s", vm.alliance.c_str());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 36, "%s", safeStatus(vm.status));
+    const UITheme::Rect route = UITheme::makeRect(12, UITheme::kContentY + 8, 278, 96);
+    const UITheme::Rect brief = UITheme::makeRect(300, UITheme::kContentY + 8, 168, 96);
+    const UITheme::Rect prep = UITheme::makeRect(12, UITheme::kContentY + 114, 456, 89);
 
-    float xi = vm.combinedPose.x() * 39.3701f;
-    float yi = vm.combinedPose.y() * 39.3701f;
-    float hd = vm.combinedPose.z() * 180.0f / static_cast<float>(M_PI);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 60,
-                        "Pose: (%.1f, %.1f) in  h=%.1f deg", xi, yi, hd);
+    UITheme::drawPanel(route, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kAmber);
+    UITheme::drawPanel(brief, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kTeal);
+    UITheme::drawPanel(prep, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kBlue);
+
+    UITheme::printTextf(pros::E_TEXT_SMALL, route.x0 + 12, route.y0 + 10,
+                        UITheme::kTextMuted, "CURRENT ROUTINE");
+    UITheme::printTextf(pros::E_TEXT_LARGE, route.x0 + 12, route.y0 + 42,
+                        UITheme::kText, "%s", vm.auton.c_str());
+    UITheme::drawChip(UITheme::makeRect(route.x1 - 96, route.y0 + 8, 84, 20),
+                      routineBadge(vm.auton), UITheme::kPanelMuted, UITheme::kAmber, UITheme::kText);
+    UITheme::printTextf(pros::E_TEXT_SMALL, route.x0 + 12, route.y1 - 16,
+                        UITheme::kTextSoft, "Alliance %s", vm.alliance.c_str());
+
+    UITheme::printTextf(pros::E_TEXT_SMALL, brief.x0 + 12, brief.y0 + 10,
+                        UITheme::kTextMuted, "MATCH BRIEF");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, brief.x0 + 12, brief.y0 + 32,
+                        UITheme::kText, "Status");
+    UITheme::printTextf(pros::E_TEXT_SMALL, brief.x0 + 12, brief.y0 + 50,
+                        UITheme::kText, "%s", safeStatus(vm.status, 22));
+    UITheme::printTextf(pros::E_TEXT_SMALL, brief.x0 + 12, brief.y1 - 16,
+                        UITheme::kTextSoft, "Adjust on SELECT tab");
+
+    char xBuf[24];
+    char yBuf[24];
+    char hBuf[24];
+    std::snprintf(xBuf, sizeof(xBuf), "%+.1f in", mToIn(vm.combinedPose.x()));
+    std::snprintf(yBuf, sizeof(yBuf), "%+.1f in", mToIn(vm.combinedPose.y()));
+    std::snprintf(hBuf, sizeof(hBuf), "%+.1f deg", radToDeg(vm.combinedPose.z()));
+
+    UITheme::printTextf(pros::E_TEXT_SMALL, prep.x0 + 12, prep.y0 + 10,
+                        UITheme::kTextMuted, "ROUTING POSTURE");
+    drawMetricTile(UITheme::makeRect(prep.x0 + 12, prep.y0 + 26, 136, 42), "POSE X", xBuf, UITheme::kAmber);
+    drawMetricTile(UITheme::makeRect(prep.x0 + 160, prep.y0 + 26, 136, 42), "POSE Y", yBuf, UITheme::kBlue);
+    drawMetricTile(UITheme::makeRect(prep.x0 + 308, prep.y0 + 26, 136, 42), "HEADING", hBuf, UITheme::kTeal);
+    UITheme::printTextf(pros::E_TEXT_SMALL, prep.x0 + 12, prep.y1 - 14,
+                        UITheme::kTextSoft, "Use ODOM, PID, and GPS tabs for live verification.");
 }
-
-// ── GPS page ────────────────────────────────────────────────────────────────
 
 static void drawGpsPage(const BrainScreen::RuntimeViewModel& vm) {
-    clearContent();
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, CONTENT_Y + 2, "GPS Tool");
+    UITheme::drawContentBackdrop();
 
-    int y = CONTENT_Y + 26;
-    float gxi = vm.gpsPose.x() * 39.3701f;
-    float gyi = vm.gpsPose.y() * 39.3701f;
-    float ghd = vm.gpsPose.z() * 180.0f / static_cast<float>(M_PI);
+    const UITheme::Rect raw = UITheme::makeRect(12, UITheme::kContentY + 8, 216, 106);
+    const UITheme::Rect delta = UITheme::makeRect(240, UITheme::kContentY + 8, 228, 106);
+    const UITheme::Rect fused = UITheme::makeRect(12, UITheme::kContentY + 124, 456, 79);
 
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y,
-                        "GPS x: %.2f m  (%.1f in)", vm.gpsPose.x(), gxi);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 18,
-                        "GPS y: %.2f m  (%.1f in)", vm.gpsPose.y(), gyi);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 36,
-                        "GPS h: %.1f deg", ghd);
+    const float dx = (vm.combinedPose.x() - vm.gpsPose.x()) * 39.3701f;
+    const float dy = (vm.combinedPose.y() - vm.gpsPose.y()) * 39.3701f;
+    const float dh = wrapDeg(radToDeg(vm.combinedPose.z() - vm.gpsPose.z()));
+    const float drift = std::sqrt(dx * dx + dy * dy);
 
-    float dx = (vm.combinedPose.x() - vm.gpsPose.x()) * 39.3701f;
-    float dy = (vm.combinedPose.y() - vm.gpsPose.y()) * 39.3701f;
+    UITheme::drawPanel(raw, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kBlue);
+    UITheme::drawPanel(delta, UITheme::kPanel, UITheme::kBorderStrong, driftAccent(drift));
+    UITheme::drawPanel(fused, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kTeal);
 
-    pros::screen::set_pen(0x00AAAAAA);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 62,
-                        "delta x: %+.1f in", dx);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 80,
-                        "delta y: %+.1f in", dy);
+    UITheme::printTextf(pros::E_TEXT_SMALL, raw.x0 + 12, raw.y0 + 10,
+                        UITheme::kTextMuted, "RAW GPS");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 34,
+                        UITheme::kText, "X  %+.1f in", mToIn(vm.gpsPose.x()));
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 54,
+                        UITheme::kText, "Y  %+.1f in", mToIn(vm.gpsPose.y()));
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 74,
+                        UITheme::kText, "H  %+.1f deg", radToDeg(vm.gpsPose.z()));
 
-    float cxi = vm.combinedPose.x() * 39.3701f;
-    float cyi = vm.combinedPose.y() * 39.3701f;
-    float chd = vm.combinedPose.z() * 180.0f / static_cast<float>(M_PI);
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 10, y + 106,
-                        "Combined: (%.1f, %.1f) in  h=%.1f", cxi, cyi, chd);
+    UITheme::printTextf(pros::E_TEXT_SMALL, delta.x0 + 12, delta.y0 + 10,
+                        UITheme::kTextMuted, "FUSION DELTA");
+    UITheme::drawChip(UITheme::makeRect(delta.x1 - 86, delta.y0 + 8, 74, 20),
+                      driftLabel(drift), UITheme::kPanelMuted, driftAccent(drift), UITheme::kText);
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 34,
+                        UITheme::kText, "dX %+.1f in", dx);
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 54,
+                        UITheme::kText, "dY %+.1f in", dy);
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 74,
+                        UITheme::kText, "dH %+.1f deg", dh);
+
+    UITheme::printTextf(pros::E_TEXT_SMALL, fused.x0 + 12, fused.y0 + 10,
+                        UITheme::kTextMuted, "COMBINED SOLUTION");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, fused.x0 + 12, fused.y0 + 30,
+                        UITheme::kText, "X %+.1f in   Y %+.1f in",
+                        mToIn(vm.combinedPose.x()), mToIn(vm.combinedPose.y()));
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, fused.x0 + 12, fused.y0 + 50,
+                        UITheme::kText, "H %+.1f deg   Drift %.1f in",
+                        radToDeg(vm.combinedPose.z()), drift);
+    UITheme::printTextf(pros::E_TEXT_SMALL, fused.x0 + 12, fused.y1 - 14,
+                        UITheme::kTextSoft, "%s", safeStatus(vm.status, 52));
 }
 
-// ── Touch handling ──────────────────────────────────────────────────────────
-
 static void handleTouch() {
-    auto t = pros::screen::touch_status();
+    const auto t = pros::screen::touch_status();
     if (t.touch_status != pros::E_TOUCH_PRESSED &&
         t.touch_status != pros::E_TOUCH_HELD) {
         return;
     }
 
-    uint32_t now = pros::millis();
+    const uint32_t now = pros::millis();
     if (now - lastTouchMs < 140) return;
     lastTouchMs = now;
 
-    int x = t.x;
-    int y = t.y;
+    const int x = t.x;
+    const int y = t.y;
 
-    // Tab bar touches
-    if (y <= TAB_Y1 + 4) {
+    if (y <= UITheme::kTopBarH) {
         if (inside(TAB_SELECT, x, y)) { activePage = Page::SELECT; return; }
         if (inside(TAB_ODOM,   x, y)) { activePage = Page::ODOM;   return; }
         if (inside(TAB_PID,    x, y)) { activePage = Page::PID;    return; }
@@ -259,13 +351,12 @@ static void handleTouch() {
         if (inside(TAB_GPS,    x, y)) { activePage = Page::GPS;    return; }
     }
 
-    // SELECT page content buttons
     if (activePage == Page::SELECT) {
         if (inside(RED_BTN, x, y))    { AutonSelector::selectAlliance(Alliance::RED);  return; }
         if (inside(BLUE_BTN, x, y))   { AutonSelector::selectAlliance(Alliance::BLUE); return; }
         if (inside(SKILLS_BTN, x, y)) { AutonSelector::selectAuton(Auton::SKILLS);     return; }
-        if (inside(PREV_BTN, x, y))   { AutonSelector::prevAuton();  return; }
-        if (inside(NEXT_BTN, x, y))   { AutonSelector::nextAuton();  return; }
+        if (inside(PREV_BTN, x, y))   { AutonSelector::prevAuton();                     return; }
+        if (inside(NEXT_BTN, x, y))   { AutonSelector::nextAuton();                     return; }
     }
 }
 
@@ -283,12 +374,7 @@ void init() {
 void render(const BrainScreen::RuntimeViewModel& vm) {
     handleTouch();
 
-    // Always redraw the tab bar
-    drawTabBar();
-
-    // Clear content when switching pages
     if (activePage != prevRenderedPage) {
-        clearContent();
         prevRenderedPage = activePage;
     }
 
@@ -309,6 +395,8 @@ void render(const BrainScreen::RuntimeViewModel& vm) {
             drawGpsPage(vm);
             break;
     }
+
+    drawTopBar();
 }
 
 }  // namespace ScreenManagerUI

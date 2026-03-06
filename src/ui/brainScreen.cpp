@@ -1,5 +1,6 @@
 #include "ui/brainScreen.h"
 #include "ui/screenManager.h"
+#include "ui/theme.h"
 #include "pros/screen.hpp"
 
 #include <cmath>
@@ -25,33 +26,48 @@ void renderInit(const InitViewModel& vm) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
 
-    pros::screen::set_pen(0x00000000);
-    pros::screen::fill_rect(0, 0, 479, 239);
+    const UITheme::Rect canvas = UITheme::makeRect(0, 0, UITheme::kScreenW, UITheme::kScreenH);
+    const UITheme::Rect brand = UITheme::makeRect(22, 24, 166, 180);
+    const UITheme::Rect status = UITheme::makeRect(202, 24, 256, 180);
+    const UITheme::Rect progressBar = UITheme::makeRect(status.x0 + 18, status.y0 + 92, 220, 18);
 
-    pros::screen::set_pen(0x00303030);
-    pros::screen::fill_rect(24, 40, 455, 200);
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::draw_rect(24, 40, 455, 200);
+    UITheme::fillRect(canvas, UITheme::kBackground);
+    UITheme::fillRect(UITheme::makeRect(0, 0, UITheme::kScreenW, 48), UITheme::kBackgroundBand);
+    UITheme::fillRect(UITheme::makeRect(0, 0, 10, UITheme::kScreenH), UITheme::kTealDeep);
+    for (int y = 54; y < UITheme::kScreenH; y += 26) {
+        UITheme::drawDividerH(0, UITheme::kScreenW - 1, y);
+    }
 
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_LARGE, 150, 58, "69580A");
-    pros::screen::print(pros::E_TEXT_MEDIUM, 56, 92, "%s", vm.stageTitle.c_str());
+    UITheme::drawPanel(brand, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kTeal);
+    UITheme::drawPanel(status, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kBlue);
 
-    int barX0 = 56;
-    int barY0 = 126;
-    int barX1 = 424;
-    int barY1 = 146;
-    int filledX = barX0 + (barX1 - barX0) * pct / 100;
+    UITheme::printTextf(pros::E_TEXT_SMALL, brand.x0 + 14, brand.y0 + 14,
+                        UITheme::kTextMuted, "COMPETITION BRAIN");
+    UITheme::printTextf(pros::E_TEXT_LARGE, brand.x0 + 14, brand.y0 + 36,
+                        UITheme::kText, "69580A");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 72,
+                        UITheme::kTextMuted, "System startup");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 98,
+                        UITheme::kTextSoft, "Localization");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 116,
+                        UITheme::kTextSoft, "Drive services");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 134,
+                        UITheme::kTextSoft, "Screen tools");
 
-    pros::screen::set_pen(0x00181818);
-    pros::screen::fill_rect(barX0, barY0, barX1, barY1);
-    pros::screen::set_pen(0x0000CC99);
-    pros::screen::fill_rect(barX0, barY0, filledX, barY1);
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::draw_rect(barX0, barY0, barX1, barY1);
+    UITheme::drawChip(UITheme::makeRect(status.x0 + 18, status.y0 + 16, 92, 22),
+                      "BOOT", UITheme::kTealDeep, UITheme::kTeal, UITheme::kText);
+    UITheme::printTextf(pros::E_TEXT_SMALL, status.x0 + 18, status.y0 + 48,
+                        UITheme::kTextMuted, "CURRENT STEP");
+    UITheme::printTextf(pros::E_TEXT_LARGE, status.x0 + 18, status.y0 + 64,
+                        UITheme::kText, "%s", vm.stageTitle.c_str());
 
-    pros::screen::print(pros::E_TEXT_MEDIUM, 56, 154, "%s", vm.detail.c_str());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 390, 154, "%d%%", pct);
+    UITheme::drawProgressBar(progressBar, progress, UITheme::kTeal);
+    UITheme::printTextf(pros::E_TEXT_SMALL, progressBar.x0, progressBar.y0 - 12,
+                        UITheme::kTextMuted, "BOOT PROGRESS");
+    UITheme::printTextf(pros::E_TEXT_MEDIUM, progressBar.x0, progressBar.y1 + 12,
+                        UITheme::kTextSoft, "%s", vm.detail.c_str());
+    UITheme::printTextf(pros::E_TEXT_LARGE, status.x1 - 42, status.y0 + 136,
+                        UITheme::kText, "%d%%", pct);
 }
 
 void renderRuntime(const RuntimeViewModel& vm) {

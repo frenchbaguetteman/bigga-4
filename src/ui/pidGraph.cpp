@@ -1,4 +1,5 @@
 #include "ui/pidGraph.h"
+#include "ui/theme.h"
 
 #include "pros/screen.hpp"
 
@@ -14,13 +15,14 @@ static std::array<double, MAX_SAMPLES> outputBuf{};
 static int head = 0;
 static int count = 0;
 
-static constexpr uint32_t BG = 0x00101010;
-static constexpr uint32_t FRAME = 0x00555555;
-static constexpr uint32_t ZERO = 0x00333333;
-static constexpr uint32_t ERR_COL = 0x00FF4444;
-static constexpr uint32_t OUT_COL = 0x0044CCCC;
-static constexpr uint32_t TXT = 0x00FFFFFF;
-static constexpr uint32_t LABEL = 0x00888888;
+static constexpr uint32_t BG = UITheme::kPanelAlt;
+static constexpr uint32_t FRAME = UITheme::kBorderStrong;
+static constexpr uint32_t GRID = 0x0022313F;
+static constexpr uint32_t ZERO = 0x00384B59;
+static constexpr uint32_t ERR_COL = UITheme::kRed;
+static constexpr uint32_t OUT_COL = UITheme::kCyan;
+static constexpr uint32_t TXT = UITheme::kText;
+static constexpr uint32_t LABEL = UITheme::kTextMuted;
 
 void init() {
     head = 0;
@@ -39,21 +41,23 @@ void addSample(double error, double output) {
 }
 
 void draw(int x0, int y0, int x1, int y1) {
-    int w = x1 - x0;
-    int h = y1 - y0;
+    int w = x1 - x0 + 1;
+    int h = y1 - y0 + 1;
     int midY = y0 + h / 2;
 
-    pros::screen::set_pen(BG);
-    pros::screen::fill_rect(x0, y0, x1, y1);
-
-    pros::screen::set_pen(FRAME);
-    pros::screen::draw_rect(x0, y0, x1, y1);
-    pros::screen::set_pen(ZERO);
-    pros::screen::draw_line(x0 + 1, midY, x1 - 1, midY);
+    UITheme::fillRect(UITheme::Rect{x0, y0, x1, y1}, BG);
+    UITheme::outlineRect(UITheme::Rect{x0, y0, x1, y1}, FRAME);
+    for (int gx = x0 + 18; gx < x1; gx += 28) {
+        UITheme::drawDividerV(gx, y0 + 1, y1 - 1, GRID);
+    }
+    for (int gy = y0 + 18; gy < y1; gy += 22) {
+        UITheme::drawDividerH(x0 + 1, x1 - 1, gy, GRID);
+    }
+    UITheme::drawDividerH(x0 + 1, x1 - 1, midY, ZERO);
 
     if (count == 0) {
-        pros::screen::set_pen(LABEL);
-        pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 8, y0 + 8, "No PID data");
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, x0 + 10, y0 + 10,
+                            LABEL, "No PID data yet");
         return;
     }
 
@@ -75,33 +79,31 @@ void draw(int x0, int y0, int x1, int y1) {
 
     int visible = std::max(0, std::min(count, w - 2));
     if (visible < 2) {
-        pros::screen::set_pen(LABEL);
-        pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 8, y0 + 8, "PID graph warming up");
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, x0 + 10, y0 + 10,
+                            LABEL, "PID graph warming up");
         return;
     }
 
-    pros::screen::set_pen(ERR_COL);
     for (int i = 0; i < visible - 1; ++i) {
         int sx1 = x1 - 1 - i;
         int sx2 = x1 - 2 - i;
-        pros::screen::draw_line(sx1, toY(errorBuf[idxNewestBack(i)]),
-                                sx2, toY(errorBuf[idxNewestBack(i + 1)]));
+        UITheme::drawLine(sx1, toY(errorBuf[idxNewestBack(i)]),
+                          sx2, toY(errorBuf[idxNewestBack(i + 1)]), ERR_COL);
     }
 
-    pros::screen::set_pen(OUT_COL);
     for (int i = 0; i < visible - 1; ++i) {
         int sx1 = x1 - 1 - i;
         int sx2 = x1 - 2 - i;
-        pros::screen::draw_line(sx1, toY(outputBuf[idxNewestBack(i)]),
-                                sx2, toY(outputBuf[idxNewestBack(i + 1)]));
+        UITheme::drawLine(sx1, toY(outputBuf[idxNewestBack(i)]),
+                          sx2, toY(outputBuf[idxNewestBack(i + 1)]), OUT_COL);
     }
 
-    pros::screen::set_pen(ERR_COL);
-    pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 4, y0 + 2, "Err");
-    pros::screen::set_pen(OUT_COL);
-    pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 48, y0 + 2, "Out");
-    pros::screen::set_pen(TXT);
-    pros::screen::print(pros::E_TEXT_MEDIUM, x0 + 94, y0 + 2, "Scale %.1f", maxVal);
+    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y0 + 5, ERR_COL, "POS");
+    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 34, y0 + 5, OUT_COL, "HEAD");
+    UITheme::printTextf(pros::E_TEXT_SMALL, x1 - 56, y0 + 5, TXT, "x%.1f", maxVal);
+    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y0 + 18, LABEL, "+%.1f", maxVal);
+    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, midY - 6, LABEL, "0");
+    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y1 - 14, LABEL, "-%.1f", maxVal);
 }
 
 }  // namespace PIDGraphUI
