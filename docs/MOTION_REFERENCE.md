@@ -52,6 +52,16 @@ Each pneumatic is a state toggle, not a timed pulse:
 - `A`: toggle `select1`
 - `B`: toggle `select2`
 
+### Driver-Control Autonomous Launch
+
+Outside competition control, holding `Down + B` on the master controller launches the currently selected autonomous from `opcontrol()`.
+
+Important limits:
+
+- this is only for off-field testing
+- it is ignored when the brain is connected to competition control
+- normal competition autonomous still runs only through `autonomous()`
+
 ## Motion Primitives
 
 ### `DriveMoveCommand`
@@ -60,13 +70,16 @@ Source: [`include/commands/driveMove.h`](../include/commands/driveMove.h)
 
 Purpose:
 
-- drive to a target `x, y` point
-- continuously aim the robot at that point while moving
+- drive to a target `x, y` point with forward or reverse approach
+- support hold-heading distance motion for EZ-style `pid_drive_set(...)`
 
 How it works:
 
 - distance error feeds `DISTANCE_PID`
 - heading-to-target error feeds `TURN_PID`
+- hold-heading mode uses signed projection on the locked heading axis
+- point mode aims the front of the robot at the target for `fwd`
+- point mode aims the rear of the robot at the target for `rev`
 - outputs are clamped to `[-127, 127]`
 - command finishes when the distance PID reports `atSetpoint()`
 
@@ -120,6 +133,10 @@ Current default gains:
 
 - `RAMSETE_ZETA = 0.4`
 - `RAMSETE_BETA = 45.0`
+
+Current usage note:
+
+- this command still exists in the repo, but the currently selectable autonomous routines now use EZ-style chained point moves instead of RAMSETE paths
 
 ### `LtvUnicycleCommand`
 
@@ -189,118 +206,92 @@ Available routines are declared in [`include/autonomous/autons.h`](../include/au
 
 ### `Negative 1`
 
-Builder: `makeNegative1()`
+Command sequence in chassis-facing inches:
 
-Profile waypoints:
-
-| Step | Pose |
-|---|---|
-| 1 | `(-1.2, -0.6, 0.0)` |
-| 2 | `(-0.6, -0.6, 0.0)` |
-| 3 | `(0.0, -0.3, 0.5)` |
-
-Profile limits:
-
-- max velocity: `1.2 m/s`
-- max acceleration: `2.0 m/s^2`
-
-Command sequence:
-
-1. Follow the three-point RAMSETE path while intaking at `127`.
-2. Wait `0.3 s`.
-3. Outtake for `0.5 s`.
-4. Rotate to absolute heading `pi`.
-5. Drive to point `(-1.2, -0.6)`.
-
-Interpretation:
-
-- the robot advances along a shallow curved path toward center-left field space
-- scores or releases using the outtake
-- turns around
-- returns toward its original negative-side area
+1. Spin intake at `127`.
+2. Chain three forward odom points:
+   - `(-47.24, -23.62)`
+   - `(-23.62, -23.62)`
+   - `(0.0, -11.81)`
+3. Wait `0.3 s`.
+4. Outtake at `-127` for `0.5 s`.
+5. Turn to EZ absolute heading `180`.
+6. Drive back to `(-47.24, -23.62)`.
 
 ### `Negative 2`
 
-Builder mapping:
-
-- `Auton::NEGATIVE_2 -> makeNegative1(ctx)`
-
-Current behavior:
-
 - identical to `Negative 1`
-
-There is no unique second negative-side routine yet.
 
 ### `Positive 1`
 
-Builder: `makePositive1()`
+Command sequence in chassis-facing inches:
 
-Profile waypoints:
-
-| Step | Pose |
-|---|---|
-| 1 | `(1.2, -0.6, pi)` |
-| 2 | `(0.6, -0.6, pi)` |
-| 3 | `(0.0, -0.3, pi - 0.5)` |
-
-Profile limits:
-
-- max velocity: `1.2 m/s`
-- max acceleration: `2.0 m/s^2`
-
-Command sequence:
-
-1. Follow the three-point RAMSETE path while intaking at `127`.
-2. Wait `0.3 s`.
-3. Outtake for `0.5 s`.
-4. Rotate to absolute heading `0`.
-5. Drive to point `(1.2, -0.6)`.
-
-Interpretation:
-
-- this is the mirrored positive-side counterpart to `Negative 1`
-- it starts with headings facing `-X`
-- it returns to a positive-side point after scoring
+1. Spin intake at `127`.
+2. Chain three forward odom points:
+   - `(47.24, -23.62)`
+   - `(23.62, -23.62)`
+   - `(0.0, -11.81)`
+3. Wait `0.3 s`.
+4. Outtake at `-127` for `0.5 s`.
+5. Turn to EZ absolute heading `0`.
+6. Drive back to `(47.24, -23.62)`.
 
 ### `Positive 2`
 
-Builder mapping:
-
-- `Auton::POSITIVE_2 -> makePositive1(ctx)`
-
-Current behavior:
-
 - identical to `Positive 1`
 
-There is no unique second positive-side routine yet.
-
-### `Skills`
-
-Builder: `makeSkills()`
-
-The skills routine is a longer sequential command group built from short line segments plus helper actions.
-
-Profile segment limits:
-
-- every `makeSegment()` call uses `1.5 m/s`
-- every `makeSegment()` call uses `2.5 m/s^2`
+### `Example Move`
 
 Command sequence:
 
-1. Follow a straight RAMSETE segment from `(-1.4, -1.4)` to `(-0.3, -1.4)` while intaking.
-2. Outtake for `0.4 s`.
-3. Follow a straight RAMSETE segment from `(-0.3, -1.4)` to `(-0.3, 0.0)`.
-4. Run `driveAndIntake()` to point `(0.3, 0.0)`.
-5. Outtake for `0.4 s`.
-6. Run `liftCycle(180.0, 0.0)`.
-7. Follow a straight RAMSETE segment from `(0.3, 0.0)` to `(1.2, 1.0)`.
-8. Outtake for `0.5 s`.
-9. Drive to point `(0.0, 0.0)`.
+1. Drive forward `24 in` with `pid_drive_set(24.0, 110)`.
+2. Drive to a robot-relative diagonal point `24 in` forward and `18 in` left.
+3. Drive back to the starting point.
+
+This routine is the simplest place to verify:
+
+- forward distance motion
+- point-to-point odom moves
+- return-to-start behavior
+
+### `Example Turn`
+
+Command sequence:
+
+1. Turn to EZ absolute heading `90`.
+2. Turn to EZ absolute heading `-90`.
+3. Turn to EZ absolute heading `180`.
+4. Turn to EZ absolute heading `0`.
+
+### `Example Path`
+
+Command sequence:
+
+1. Spin intake at `96`.
+2. Chain three forward odom points relative to the current pose:
+   - `18 in` forward, `10 in` left
+   - `36 in` forward, `8 in` right
+   - `48 in` forward, `0 in` left/right
+3. Outtake at `-127` for `0.3 s`.
+4. Return to the starting point.
+
+### `Skills`
+
+Command sequence in chassis-facing inches:
+
+1. Spin intake at `127`.
+2. Drive to `(-11.81, -55.12)`.
+3. Outtake at `-127` for `0.4 s`.
+4. Drive to `(-11.81, 0.0)`.
+5. Drive to `(11.81, 0.0)`.
+6. Outtake at `-127` for `0.4 s`.
+7. Run the placeholder lift cycle.
+8. Drive to `(47.24, 39.37)`.
+9. Outtake at `-127` for `0.5 s`.
+10. Drive back to `(0.0, 0.0)`.
 
 Important skills-specific notes:
 
-- In `opcontrol()`, if `Skills` is selected, this auton is auto-scheduled immediately.
-- The partner controller `Right` button cancels it if it is still running.
 - The lift step currently acts like a logical placeholder because lift hardware is stubbed.
 
 ### `None`
@@ -313,16 +304,19 @@ Use this when you want a no-op autonomous slot.
 
 ## Autonomous Ownership and Interruptions
 
-All motion commands declare drivetrain as a requirement. That means:
+Official competition autonomous still runs through `autonomous()` in [`src/main.cpp`](../src/main.cpp).
+
+Off-field testing behavior:
+
+- holding `Down + B` in `opcontrol()` launches the selected autonomous once
+- the launcher is ignored when the brain is connected to competition control
+- there is no longer a special `Skills` auto-run path inside `opcontrol()`
+
+All drivetrain motion commands declare drivetrain as a requirement. That means:
 
 - only one drivetrain motion command runs at once
 - driver control only resumes when the drivetrain is no longer owned
 - any command ending or being canceled stops the drivetrain
-
-This is especially relevant for:
-
-- skills autonomous inside `opcontrol()`
-- any future debugging command you schedule manually
 
 ## Pose Source Used By Motion Controllers
 
@@ -341,7 +335,7 @@ So when localization is healthy, all autonomous movement is driven against the f
 |---|---|---|
 | `DriveMoveCommand` | distance PID at setpoint | drivetrain stop |
 | `RotateCommand` | turn PID at setpoint | drivetrain stop |
-| `RamseteCommand` | profile time elapsed | drivetrain stop |
+| `SequentialCommandGroup` over chained odom points | final segment finishes | drivetrain stop |
 | `IntakeSpinCommand` | never by itself | intake stop on interrupt |
 | `IntakeTimedCommand` | fixed time elapsed | intake stop |
 

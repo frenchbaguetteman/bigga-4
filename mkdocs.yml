@@ -1,41 +1,70 @@
-site_name: 69580A Docs
-site_description: Competition, motion, and engineering documentation for the 69580A robot codebase
+site_name: 69580A Robot Docs
+site_description: Match-ready operator, autonomous, and engineering documentation for the 69580A robot codebase
 site_url: https://example.invalid/69580a-docs
 repo_name: bigga-4
 repo_url: https://example.invalid/bigga-4
+copyright: 69580A robotics documentation
 
 theme:
   name: material
   language: en
+  icon:
+    logo: material/robot-industrial
+    repo: material/github
   features:
     - navigation.instant
+    - navigation.instant.progress
     - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.expand
+    - navigation.path
+    - navigation.tracking
     - navigation.top
     - navigation.footer
     - navigation.indexes
+    - navigation.prune
     - search.highlight
     - search.suggest
+    - search.share
     - content.code.copy
     - content.tabs.link
+    - content.tooltips
     - toc.follow
   palette:
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+      primary: teal
+      accent: amber
     - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
       primary: teal
       accent: amber
   font:
     text: Space Grotesk
     code: JetBrains Mono
-  icon:
-    repo: material/github
 
 nav:
   - Home: index.md
-  - Operators:
+  - Start Here:
+      - Getting Started: GETTING_STARTED.md
+      - Template Tour: TEMPLATE_TOUR.md
+      - Tutorials: TUTORIALS.md
+      - Autonomous Cookbook: AUTONOMOUS_COOKBOOK.md
+  - Match Ops:
       - User Guide: USER_GUIDE.md
       - Motion Reference: MOTION_REFERENCE.md
-      - Tutorials: TUTORIALS.md
   - Engineering:
-      - API Reference: API_REFERENCE.md
+      - API Reference:
+          - Overview: API_REFERENCE.md
+          - Command Framework: API_COMMANDS.md
+          - Autonomous and Motion: API_AUTONOMOUS_AND_MOTION.md
+          - Subsystems and UI: API_SUBSYSTEMS_AND_UI.md
+          - Configuration Surface: API_CONFIGURATION.md
       - Localization Design Rationale: LOCALIZATION_DESIGN_RATIONALE.md
       - Localization Refactoring Summary: LOCALIZATION_REFACTORING_SUMMARY.md
       - Localization Regression Tests: LOCALIZATION_REGRESSION_TESTS.md
@@ -51,6 +80,9 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true

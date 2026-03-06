@@ -24,10 +24,12 @@ public:
     RotateCommand(Drivetrain* drivetrain,
                   float targetAngle,
                   std::function<Eigen::Vector3f()> poseSource,
-                  float tolerance = 0.03f)
+                  float tolerance = 0.03f,
+                  float maxOutput = 127.0f)
         : m_drivetrain(drivetrain)
         , m_targetAngle(targetAngle)
         , m_poseSource(std::move(poseSource))
+        , m_maxOutput(std::fabs(maxOutput))
         , m_pid(CONFIG::TURN_PID, tolerance) {}
 
     void initialize() override {
@@ -39,7 +41,7 @@ public:
         float error = utils::angleDifference(m_targetAngle, pose.z());
         float output = m_pid.calculate(0.0f, error);
 
-        m_drivetrain->arcade(0.0f, utils::clamp(output, -127.0f, 127.0f));
+        m_drivetrain->arcade(0.0f, utils::clamp(output, -m_maxOutput, m_maxOutput));
     }
 
     void end(bool /*interrupted*/) override {
@@ -58,5 +60,6 @@ private:
     Drivetrain* m_drivetrain;
     float m_targetAngle;
     std::function<Eigen::Vector3f()> m_poseSource;
+    float m_maxOutput;
     PID m_pid;
 };

@@ -16,6 +16,11 @@
 
 class DriveMoveCommand : public Command {
 public:
+    enum class MotionMode {
+        PointToPoint,
+        HoldHeading,
+    };
+
     /**
      * @param drivetrain   robot drivetrain
      * @param target       target (x, y) in metres
@@ -25,11 +30,35 @@ public:
     DriveMoveCommand(Drivetrain* drivetrain,
                      Eigen::Vector2f target,
                      std::function<Eigen::Vector3f()> poseSource,
-                     float tolerance = 0.02f)
+                     float tolerance = 0.02f,
+                     float maxOutput = 127.0f)
         : m_drivetrain(drivetrain)
         , m_target(target)
         , m_poseSource(std::move(poseSource))
         , m_tolerance(tolerance)
+        , m_motionMode(MotionMode::PointToPoint)
+        , m_headingTarget(0.0f)
+        , m_driveSign(1)
+        , m_maxOutput(std::fabs(maxOutput))
+        , m_distPid(CONFIG::DISTANCE_PID, tolerance)
+        , m_turnPid(CONFIG::TURN_PID, 0.05f) {}
+
+    DriveMoveCommand(Drivetrain* drivetrain,
+                     Eigen::Vector2f target,
+                     std::function<Eigen::Vector3f()> poseSource,
+                     MotionMode motionMode,
+                     float headingTarget,
+                     int driveSign,
+                     float tolerance = 0.02f,
+                     float maxOutput = 127.0f)
+        : m_drivetrain(drivetrain)
+        , m_target(target)
+        , m_poseSource(std::move(poseSource))
+        , m_tolerance(tolerance)
+        , m_motionMode(motionMode)
+        , m_headingTarget(headingTarget)
+        , m_driveSign(driveSign >= 0 ? 1 : -1)
+        , m_maxOutput(std::fabs(maxOutput))
         , m_distPid(CONFIG::DISTANCE_PID, tolerance)
         , m_turnPid(CONFIG::TURN_PID, 0.05f) {}
 
@@ -40,18 +69,31 @@ public:
 
     void execute() override {
         Eigen::Vector3f pose = m_poseSource();
-        float dx = m_target.x() - pose.x();
-        float dy = m_target.y() - pose.y();
-        float dist = std::sqrt(dx * dx + dy * dy);
-        float targetAngle = std::atan2(dy, dx);
+        const Eigen::Vector2f error(m_target.x() - pose.x(), m_target.y() - pose.y());
 
-        float driveOut = m_distPid.calculate(0.0f, dist);
-        float turnOut  = m_turnPid.calculate(0.0f,
+        float driveError = 0.0f;
+        float targetAngle = m_headingTarget;
+
+        if (m_motionMode == MotionMode::HoldHeading) {
+            const Eigen::Vector2f axis(std::cos(m_headingTarget), std::sin(m_headingTarget));
+            driveError = error.dot(axis);
+        } else {
+            const float dist = error.norm();
+            targetAngle = std::atan2(error.y(), error.x());
+            if (m_driveSign < 0) {
+                targetAngle = utils::angleWrap(targetAngle + static_cast<float>(M_PI));
+            }
+            driveError = dist * static_cast<float>(m_driveSign);
+        }
+
+        float driveOut = m_distPid.calculate(0.0f, driveError);
+        float turnOut  = m_turnPid.calculate(
+            0.0f,
             utils::angleDifference(targetAngle, pose.z()));
 
         m_drivetrain->arcade(
-            utils::clamp(driveOut, -127.0f, 127.0f),
-            utils::clamp(turnOut, -127.0f, 127.0f));
+            utils::clamp(driveOut, -m_maxOutput, m_maxOutput),
+            utils::clamp(turnOut, -m_maxOutput, m_maxOutput));
     }
 
     void end(bool /*interrupted*/) override {
@@ -71,6 +113,10 @@ private:
     Eigen::Vector2f m_target;
     std::function<Eigen::Vector3f()> m_poseSource;
     float m_tolerance;
+    MotionMode m_motionMode;
+    float m_headingTarget;
+    int m_driveSign;
+    float m_maxOutput;
     PID m_distPid;
     PID m_turnPid;
 };

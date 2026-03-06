@@ -1,5 +1,6 @@
 #include "ui/screenManager.h"
 
+#include "config.h"
 #include "ui/autonSelector.h"
 #include "ui/display.h"
 #include "ui/pidGraph.h"
@@ -18,7 +19,7 @@ namespace {
 
 enum class Page {
     SELECT,
-    ODOM,
+    LOCALIZATION,
     PID,
     PATH,
     GPS
@@ -31,6 +32,11 @@ static constexpr UITheme::Rect TAB_PID    {248, 4, 320, 21};
 static constexpr UITheme::Rect TAB_PATH   {324, 4, 396, 21};
 static constexpr UITheme::Rect TAB_GPS    {400, 4, 472, 21};
 
+static constexpr UITheme::Rect LOCAL_SUB_ODOM     = UITheme::makeRect(12, UITheme::kContentY + 8, 108, 22);
+static constexpr UITheme::Rect LOCAL_SUB_GPS      = UITheme::makeRect(128, UITheme::kContentY + 8, 108, 22);
+static constexpr UITheme::Rect LOCAL_SUB_MCL      = UITheme::makeRect(244, UITheme::kContentY + 8, 108, 22);
+static constexpr UITheme::Rect LOCAL_SUB_COMBINED = UITheme::makeRect(360, UITheme::kContentY + 8, 108, 22);
+
 static constexpr UITheme::Rect RED_BTN    {24, 70, 105, 95};
 static constexpr UITheme::Rect BLUE_BTN   {114, 70, 195, 95};
 static constexpr UITheme::Rect PREV_BTN   {307, 58, 374, 87};
@@ -39,6 +45,7 @@ static constexpr UITheme::Rect SKILLS_BTN {307, 98, 454, 121};
 
 static Page activePage = Page::SELECT;
 static Page prevRenderedPage = Page::SELECT;
+static DisplayUI::LocalizationView activeLocalizationView = DisplayUI::LocalizationView::Combined;
 static uint32_t lastTouchMs = 0;
 
 static bool inside(const UITheme::Rect& r, int x, int y) {
@@ -49,10 +56,18 @@ static float radToDeg(float r) {
     return r * 180.0f / static_cast<float>(M_PI);
 }
 
+static float headingToCompassDeg(float headingRad) {
+    return CONFIG::internalRadToGpsHeadingDeg(headingRad);
+}
+
 static float wrapDeg(float deg) {
     while (deg > 180.0f) deg -= 360.0f;
     while (deg < -180.0f) deg += 360.0f;
     return deg;
+}
+
+static float headingDeltaCompassDeg(float deltaRad) {
+    return wrapDeg(-radToDeg(deltaRad));
 }
 
 static float mToIn(float m) {
@@ -140,10 +155,32 @@ static void drawTopBar() {
                         UITheme::kText, "69580A");
 
     drawTab(TAB_SELECT, "SELECT", activePage == Page::SELECT);
-    drawTab(TAB_ODOM,   "ODOM",   activePage == Page::ODOM);
+    drawTab(TAB_ODOM,   "LOCAL",  activePage == Page::LOCALIZATION);
     drawTab(TAB_PID,    "PID",    activePage == Page::PID);
     drawTab(TAB_PATH,   "PATH",   activePage == Page::PATH);
     drawTab(TAB_GPS,    "GPS",    activePage == Page::GPS);
+}
+
+static void drawLocalizationSubtabs() {
+    auto drawLocalTab = [](const UITheme::Rect& r,
+                           const char* label,
+                           DisplayUI::LocalizationView view) {
+        const bool active = activeLocalizationView == view;
+        UITheme::drawPanel(
+            r,
+            active ? UITheme::kPanel : UITheme::kPanelMuted,
+            active ? UITheme::kBorderStrong : UITheme::kBorder,
+            active ? UITheme::kTeal : 0,
+            false);
+        UITheme::printCenteredf(pros::E_TEXT_SMALL, r, r.y0 + 6,
+                                active ? UITheme::kText : UITheme::kTextMuted,
+                                "%s", label);
+    };
+
+    drawLocalTab(LOCAL_SUB_ODOM, "PURE ODOM", DisplayUI::LocalizationView::PureOdom);
+    drawLocalTab(LOCAL_SUB_GPS, "PURE GPS", DisplayUI::LocalizationView::PureGps);
+    drawLocalTab(LOCAL_SUB_MCL, "PURE MCL", DisplayUI::LocalizationView::PureMcl);
+    drawLocalTab(LOCAL_SUB_COMBINED, "COMBINED", DisplayUI::LocalizationView::Combined);
 }
 
 static void drawSelectPage(const BrainScreen::RuntimeViewModel& vm) {
@@ -198,7 +235,7 @@ static void drawSelectPage(const BrainScreen::RuntimeViewModel& vm) {
     char hBuf[24];
     std::snprintf(xBuf, sizeof(xBuf), "%+.1f in", mToIn(vm.combinedPose.x()));
     std::snprintf(yBuf, sizeof(yBuf), "%+.1f in", mToIn(vm.combinedPose.y()));
-    std::snprintf(hBuf, sizeof(hBuf), "%+.1f deg", radToDeg(vm.combinedPose.z()));
+    std::snprintf(hBuf, sizeof(hBuf), "%.1f deg", headingToCompassDeg(vm.combinedPose.z()));
 
     drawMetricTile(UITheme::makeRect(live.x0 + 12, live.y0 + 24, 134, 38), "X", xBuf, UITheme::kAmber);
     drawMetricTile(UITheme::makeRect(live.x0 + 160, live.y0 + 24, 134, 38), "Y", yBuf, UITheme::kBlue);
@@ -214,7 +251,7 @@ static void drawPidPage(const BrainScreen::RuntimeViewModel& vm) {
 
     double errIn = static_cast<double>(vm.combinedPose.x() - vm.pureOdomPose.x()) * 39.3701;
     double headingErrDeg = static_cast<double>(
-        wrapDeg(radToDeg(vm.combinedPose.z() - vm.pureOdomPose.z())));
+        headingDeltaCompassDeg(vm.combinedPose.z() - vm.pureOdomPose.z()));
 
     if (!std::isfinite(errIn)) errIn = 0.0;
     if (!std::isfinite(headingErrDeg)) headingErrDeg = 0.0;
@@ -278,7 +315,7 @@ static void drawPathPage(const BrainScreen::RuntimeViewModel& vm) {
     char hBuf[24];
     std::snprintf(xBuf, sizeof(xBuf), "%+.1f in", mToIn(vm.combinedPose.x()));
     std::snprintf(yBuf, sizeof(yBuf), "%+.1f in", mToIn(vm.combinedPose.y()));
-    std::snprintf(hBuf, sizeof(hBuf), "%+.1f deg", radToDeg(vm.combinedPose.z()));
+    std::snprintf(hBuf, sizeof(hBuf), "%.1f deg", headingToCompassDeg(vm.combinedPose.z()));
 
     UITheme::printTextf(pros::E_TEXT_SMALL, prep.x0 + 12, prep.y0 + 10,
                         UITheme::kTextMuted, "ROUTING POSTURE");
@@ -286,7 +323,7 @@ static void drawPathPage(const BrainScreen::RuntimeViewModel& vm) {
     drawMetricTile(UITheme::makeRect(prep.x0 + 160, prep.y0 + 26, 136, 42), "POSE Y", yBuf, UITheme::kBlue);
     drawMetricTile(UITheme::makeRect(prep.x0 + 308, prep.y0 + 26, 136, 42), "HEADING", hBuf, UITheme::kTeal);
     UITheme::printTextf(pros::E_TEXT_SMALL, prep.x0 + 12, prep.y1 - 14,
-                        UITheme::kTextSoft, "Use ODOM, PID, and GPS tabs for live verification.");
+                        UITheme::kTextSoft, "Use LOCAL, PID, and GPS tabs for live verification.");
 }
 
 static void drawGpsPage(const BrainScreen::RuntimeViewModel& vm) {
@@ -296,10 +333,17 @@ static void drawGpsPage(const BrainScreen::RuntimeViewModel& vm) {
     const UITheme::Rect delta = UITheme::makeRect(240, UITheme::kContentY + 8, 228, 106);
     const UITheme::Rect fused = UITheme::makeRect(12, UITheme::kContentY + 124, 456, 79);
 
-    const float dx = (vm.combinedPose.x() - vm.gpsPose.x()) * 39.3701f;
-    const float dy = (vm.combinedPose.y() - vm.gpsPose.y()) * 39.3701f;
-    const float dh = wrapDeg(radToDeg(vm.combinedPose.z() - vm.gpsPose.z()));
-    const float drift = std::sqrt(dx * dx + dy * dy);
+    const bool gpsValid = vm.gpsPoseValid;
+    const float dx = gpsValid ? (vm.combinedPose.x() - vm.gpsPose.x()) * 39.3701f : 0.0f;
+    const float dy = gpsValid ? (vm.combinedPose.y() - vm.gpsPose.y()) * 39.3701f : 0.0f;
+    const float dh = gpsValid ? headingDeltaCompassDeg(vm.combinedPose.z() - vm.gpsPose.z()) : 0.0f;
+    const float drift = gpsValid ? std::sqrt(dx * dx + dy * dy) : 0.0f;
+    char driftBuf[16];
+    if (gpsValid) {
+        std::snprintf(driftBuf, sizeof(driftBuf), "%.1f in", drift);
+    } else {
+        std::snprintf(driftBuf, sizeof(driftBuf), "--");
+    }
 
     UITheme::drawPanel(raw, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kBlue);
     UITheme::drawPanel(delta, UITheme::kPanel, UITheme::kBorderStrong, driftAccent(drift));
@@ -307,23 +351,37 @@ static void drawGpsPage(const BrainScreen::RuntimeViewModel& vm) {
 
     UITheme::printTextf(pros::E_TEXT_SMALL, raw.x0 + 12, raw.y0 + 10,
                         UITheme::kTextMuted, "RAW GPS");
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 34,
-                        UITheme::kText, "X  %+.1f in", mToIn(vm.gpsPose.x()));
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 54,
-                        UITheme::kText, "Y  %+.1f in", mToIn(vm.gpsPose.y()));
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 74,
-                        UITheme::kText, "H  %+.1f deg", radToDeg(vm.gpsPose.z()));
+    if (gpsValid) {
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 34,
+                            UITheme::kText, "X  %+.1f in", mToIn(vm.gpsPose.x()));
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 54,
+                            UITheme::kText, "Y  %+.1f in", mToIn(vm.gpsPose.y()));
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 74,
+                            UITheme::kText, "H  %.1f deg", headingToCompassDeg(vm.gpsPose.z()));
+    } else {
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, raw.x0 + 12, raw.y0 + 42,
+                            UITheme::kText, "No valid GPS lock");
+        UITheme::printTextf(pros::E_TEXT_SMALL, raw.x0 + 12, raw.y0 + 68,
+                            UITheme::kTextSoft, "Use LOCAL > PURE GPS");
+    }
 
     UITheme::printTextf(pros::E_TEXT_SMALL, delta.x0 + 12, delta.y0 + 10,
                         UITheme::kTextMuted, "FUSION DELTA");
-    UITheme::drawChip(UITheme::makeRect(delta.x1 - 86, delta.y0 + 8, 74, 20),
-                      driftLabel(drift), UITheme::kPanelMuted, driftAccent(drift), UITheme::kText);
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 34,
-                        UITheme::kText, "dX %+.1f in", dx);
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 54,
-                        UITheme::kText, "dY %+.1f in", dy);
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 74,
-                        UITheme::kText, "dH %+.1f deg", dh);
+    if (gpsValid) {
+        UITheme::drawChip(UITheme::makeRect(delta.x1 - 86, delta.y0 + 8, 74, 20),
+                          driftLabel(drift), UITheme::kPanelMuted, driftAccent(drift), UITheme::kText);
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 34,
+                            UITheme::kText, "dX %+.1f in", dx);
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 54,
+                            UITheme::kText, "dY %+.1f in", dy);
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 74,
+                            UITheme::kText, "dH %+.1f deg", dh);
+    } else {
+        UITheme::printTextf(pros::E_TEXT_MEDIUM, delta.x0 + 12, delta.y0 + 42,
+                            UITheme::kText, "Waiting for usable GPS");
+        UITheme::printTextf(pros::E_TEXT_SMALL, delta.x0 + 12, delta.y0 + 68,
+                            UITheme::kTextSoft, "No drift metrics available");
+    }
 
     UITheme::printTextf(pros::E_TEXT_SMALL, fused.x0 + 12, fused.y0 + 10,
                         UITheme::kTextMuted, "COMBINED SOLUTION");
@@ -331,8 +389,9 @@ static void drawGpsPage(const BrainScreen::RuntimeViewModel& vm) {
                         UITheme::kText, "X %+.1f in   Y %+.1f in",
                         mToIn(vm.combinedPose.x()), mToIn(vm.combinedPose.y()));
     UITheme::printTextf(pros::E_TEXT_MEDIUM, fused.x0 + 12, fused.y0 + 50,
-                        UITheme::kText, "H %+.1f deg   Drift %.1f in",
-                        radToDeg(vm.combinedPose.z()), drift);
+                        UITheme::kText, "H %.1f deg   Drift %s",
+                        headingToCompassDeg(vm.combinedPose.z()),
+                        driftBuf);
     UITheme::printTextf(pros::E_TEXT_SMALL, fused.x0 + 12, fused.y1 - 14,
                         UITheme::kTextSoft, "%s", safeStatus(vm.status, 52));
 }
@@ -353,10 +412,24 @@ static void handleTouch() {
 
     if (y <= UITheme::kTopBarH) {
         if (inside(TAB_SELECT, x, y)) { activePage = Page::SELECT; return; }
-        if (inside(TAB_ODOM,   x, y)) { activePage = Page::ODOM;   return; }
+        if (inside(TAB_ODOM,   x, y)) { activePage = Page::LOCALIZATION; return; }
         if (inside(TAB_PID,    x, y)) { activePage = Page::PID;    return; }
         if (inside(TAB_PATH,   x, y)) { activePage = Page::PATH;   return; }
         if (inside(TAB_GPS,    x, y)) { activePage = Page::GPS;    return; }
+    }
+
+    if (activePage == Page::LOCALIZATION) {
+        auto setView = [&](DisplayUI::LocalizationView view) {
+            if (activeLocalizationView != view) {
+                activeLocalizationView = view;
+                DisplayUI::clearTrail();
+            }
+        };
+
+        if (inside(LOCAL_SUB_ODOM, x, y))     { setView(DisplayUI::LocalizationView::PureOdom); return; }
+        if (inside(LOCAL_SUB_GPS, x, y))      { setView(DisplayUI::LocalizationView::PureGps); return; }
+        if (inside(LOCAL_SUB_MCL, x, y))      { setView(DisplayUI::LocalizationView::PureMcl); return; }
+        if (inside(LOCAL_SUB_COMBINED, x, y)) { setView(DisplayUI::LocalizationView::Combined); return; }
     }
 
     if (activePage == Page::SELECT) {
@@ -377,6 +450,7 @@ void init() {
     PIDGraphUI::init();
     activePage = Page::SELECT;
     prevRenderedPage = Page::SELECT;
+    activeLocalizationView = DisplayUI::LocalizationView::Combined;
 }
 
 void render(const BrainScreen::RuntimeViewModel& vm) {
@@ -390,8 +464,9 @@ void render(const BrainScreen::RuntimeViewModel& vm) {
         case Page::SELECT:
             drawSelectPage(vm);
             break;
-        case Page::ODOM:
-            DisplayUI::update(vm);
+        case Page::LOCALIZATION:
+            DisplayUI::update(vm, activeLocalizationView);
+            drawLocalizationSubtabs();
             break;
         case Page::PID:
             drawPidPage(vm);

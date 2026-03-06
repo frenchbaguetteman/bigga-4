@@ -17,7 +17,6 @@ static float clamp01(float x) {
 void initialize() {
     pros::screen::set_eraser(0x00000000);
     pros::screen::erase();
-    ScreenManagerUI::init();
 }
 
 void renderInit(const InitViewModel& vm) {

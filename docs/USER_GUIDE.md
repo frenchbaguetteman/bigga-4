@@ -19,7 +19,7 @@ The robot is a command-based PROS V5 project with these active systems:
 - IMU-based heading
 - Odometry using a horizontal tracking wheel plus drive-encoder fallback for forward distance
 - Monte Carlo localization (MCL) with GPS and four distance sensors
-- Motion-profiled autonomous paths followed with RAMSETE
+- EZ-style chassis autonomous with point moves, turns, and chained odom segments
 - Brain-screen UI for auton selection and localization diagnostics
 
 Current non-obvious implementation facts:
@@ -28,7 +28,7 @@ Current non-obvious implementation facts:
 - `Negative 2` currently runs the same command graph as `Negative 1`.
 - `Positive 2` currently runs the same command graph as `Positive 1`.
 - Alliance selection is displayed in the UI, but autonomous building does not currently branch on alliance.
-- If `Skills` is selected, the skills autonomous is automatically scheduled inside `opcontrol()`.
+- `Down + B` can launch the selected autonomous from driver control only when the brain is not connected to competition control.
 
 ## Competition-Day Quick Start
 
@@ -57,7 +57,7 @@ The code in [`src/main.cpp`](../src/main.cpp) binds the master controller like t
 | `L2` press | Toggle wing pneumatic | Edge-triggered |
 | `A` press | Toggle `select1` pneumatic | Edge-triggered |
 | `B` press | Toggle `select2` pneumatic | Edge-triggered |
-| Partner `Right` | Cancel running skills auton | Only when `Skills` is selected and active |
+| `Down` + `B` held | Run selected autonomous | Driver-control testing only, ignored while connected to competition control |
 
 ### Driver Feel
 
@@ -114,8 +114,11 @@ The ordered autonomous list comes from [`src/autonomous/autons.cpp`](../src/auto
 2. `Negative 2`
 3. `Positive 1`
 4. `Positive 2`
-5. `Skills`
-6. `None`
+5. `Example Move`
+6. `Example Turn`
+7. `Example Path`
+8. `Skills`
+9. `None`
 
 ## Hardware Map
 
@@ -177,9 +180,8 @@ When initialization is complete, the master controller rumbles once.
 - resets the command scheduler
 - cancels any leftover autonomous command
 - installs controller trigger bindings
+- allows EZ-style `Down + B` autonomous launch when off-field
 - runs shaped arcade drive whenever the drivetrain is not owned by another command
-
-Special case: if the selected routine is `Skills`, the auton command is scheduled immediately in driver control. This is intended for programming-skills use.
 
 ## Autonomous Selection and Slot Defaults
 
@@ -255,9 +257,9 @@ For design rationale and regression procedures, see:
 
 The robot has three main autonomous motion primitives:
 
-- `DriveMoveCommand`: point-to-point PID drive
+- `DriveMoveCommand`: signed drive-to-point and hold-heading PID motion
 - `RotateCommand`: PID turn-in-place
-- `RamseteCommand`: profile follower over a `MotionProfile`
+- `SequentialCommandGroup`: chained EZ-style odom segments built from point moves
 
 The current autonomous routines are all assembled from those primitives. Detailed step-by-step motion documentation lives in [docs/MOTION_REFERENCE.md](MOTION_REFERENCE.md).
 
@@ -303,10 +305,12 @@ The highest-impact constants for day-to-day work are:
 - `TURN_PID`
 - `DISTANCE_PID`
 
-### RAMSETE Tracking
+### Optional Profile Tracking
 
 - `RAMSETE_ZETA`
 - `RAMSETE_BETA`
+
+These only matter if you explicitly build new `RamseteCommand` paths. The currently selected autonomous routines do not depend on them.
 
 ### Localization Confidence
 

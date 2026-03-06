@@ -11,6 +11,7 @@
  */
 #include "main.h"
 #include "ui/brainScreen.h"
+#include "ui/screenManager.h"
 #include <cstdio>
 #include <cmath>
 #include <string>
@@ -41,8 +42,13 @@ static std::unique_ptr<Command> autonCommand;
 
 static std::function<Eigen::Vector3f()> poseSource;
 static std::unique_ptr<pros::Gps> uiGps;
+static std::unique_ptr<pros::Distance> uiDistLeft;
+static std::unique_ptr<pros::Distance> uiDistRight;
+static std::unique_ptr<pros::Distance> uiDistFront;
+static std::unique_ptr<pros::Distance> uiDistBack;
 static Eigen::Vector3f combinedPose(0.0f, 0.0f, 0.0f);
 static Eigen::Vector2f combinedCorrection(0.0f, 0.0f);
+static uint32_t firstInitScreenMs = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Status string for screen (only touched from screen task after init)
@@ -54,6 +60,33 @@ struct GpsPoseSample {
     Eigen::Vector3f pose{0.0f, 0.0f, 0.0f};
     float errorM = -1.0f;
 };
+
+static float headingToCompassDeg(float headingRad) {
+    return CONFIG::internalRadToGpsHeadingDeg(headingRad);
+}
+
+static float wrapAngleRad(float angleRad) {
+    return std::atan2(std::sin(angleRad), std::cos(angleRad));
+}
+
+static BrainScreen::RuntimeViewModel::DistanceSensorViewModel sampleDistanceSensor(
+    const char* label,
+    const std::unique_ptr<pros::Distance>& sensor) {
+    BrainScreen::RuntimeViewModel::DistanceSensorViewModel sample;
+    sample.label = label;
+    if (!sensor) return sample;
+
+    const int rawMm = sensor->get_distance();
+    if (rawMm <= 0 || rawMm >= 9999) {
+        sample.confidence = sensor->get_confidence();
+        return sample;
+    }
+
+    sample.valid = true;
+    sample.rangeM = static_cast<float>(rawMm) / 1000.0f;
+    sample.confidence = sensor->get_confidence();
+    return sample;
+}
 
 static Eigen::Vector2f clampVectorMagnitude(const Eigen::Vector2f& v, float maxMagnitude) {
     if (!LocMath::isFiniteVec2(v) || maxMagnitude <= 0.0f) {
@@ -180,11 +213,33 @@ static Eigen::Vector3f computeCombinedPose() {
 static void renderInitStage(float progress,
                             const std::string& stage,
                             const std::string& detail = "") {
-    BrainScreen::InitViewModel vm;
-    vm.progress = progress;
-    vm.stageTitle = stage;
-    vm.detail = detail;
-    BrainScreen::renderInit(vm);
+    const float clampedProgress = std::max(0.0f, std::min(1.0f, progress));
+    const int pct = static_cast<int>(std::round(clampedProgress * 100.0f));
+    if (firstInitScreenMs == 0) {
+        firstInitScreenMs = pros::millis();
+    }
+
+    std::printf("[BOOT] %3d%% %s", pct, stage.c_str());
+    if (!detail.empty()) {
+        std::printf(" - %s", detail.c_str());
+    }
+    std::printf("\n");
+
+    pros::screen::set_eraser(0x00000000);
+    pros::screen::erase();
+    pros::screen::set_pen(0x00FFFFFF);
+    pros::screen::print(pros::E_TEXT_LARGE, 16, 24, "69580A BOOT");
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 64, "Stage: %s", stage.c_str());
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 92, "Detail: %s",
+                        detail.empty() ? "..." : detail.c_str());
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 132, "Progress: %d%%", pct);
+    pros::screen::set_pen(0x00314A5D);
+    pros::screen::draw_rect(16, 168, 463, 192);
+    pros::screen::set_pen(0x001FC8B0);
+    const int barRight = 18 + static_cast<int>(442.0f * clampedProgress);
+    if (barRight >= 18) {
+        pros::screen::fill_rect(18, 170, std::min(460, barRight), 190);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -235,15 +290,15 @@ void update_loop() {
                 auto pf   = particleFilter ? particleFilter->getPrediction()
                                            : Eigen::Vector3f(0, 0, 0);
                 
-                std::printf("[LOC] odom_delta=%.4f imu=%.3f gps(%c)=(%.3f,%.3f,%.3f,err=%.3f) "
-                            "odom=(%.3f,%.3f,%.3f) pf=(%.3f,%.3f,%.3f) "
-                            "comb=(%.3f,%.3f,%.3f) corr=(%.3f,%.3f)|%.3f\n",
+                std::printf("[LOC] odom_delta=%.4f imu=%.1fdeg gps(%c)=(%.3f,%.3f,%.1fdeg,err=%.3f) "
+                            "odom=(%.3f,%.3f,%.1fdeg) pf=(%.3f,%.3f,%.1fdeg) "
+                            "comb=(%.3f,%.3f,%.1fdeg) corr=(%.3f,%.3f)|%.3f\n",
                     deltaLen,
-                    imuH,
-                    gpsOk ? 'Y' : 'N', gpsX, gpsY, gpsH, gpsErr,
-                    odom.x(), odom.y(), odom.z(),
-                    pf.x(), pf.y(), pf.z(),
-                    fusedPose.x(), fusedPose.y(), fusedPose.z(),
+                    headingToCompassDeg(imuH),
+                    gpsOk ? 'Y' : 'N', gpsX, gpsY, headingToCompassDeg(gpsH), gpsErr,
+                    odom.x(), odom.y(), headingToCompassDeg(odom.z()),
+                    pf.x(), pf.y(), headingToCompassDeg(pf.z()),
+                    fusedPose.x(), fusedPose.y(), headingToCompassDeg(fusedPose.z()),
                     combinedCorrection.x(), combinedCorrection.y(), combinedCorrection.norm());
             }
         }
@@ -294,7 +349,22 @@ void screen_update_loop() {
 
         if (auto gpsSample = sampleGpsPose()) {
             vm.gpsPose = gpsSample->pose;
+            vm.gpsPoseValid = true;
+            vm.gpsErrorM = gpsSample->errorM;
         }
+
+        vm.pfActiveSensors = particleFilter ? particleFilter->getLastActiveSensorCount() : 0;
+        vm.pfAbsoluteSensors = particleFilter ? particleFilter->getLastActiveAbsoluteSensorCount() : 0;
+        vm.pfUsedMeasurements = particleFilter ? particleFilter->lastUpdateUsedMeasurements() : false;
+        vm.pfDidResample = particleFilter ? particleFilter->lastUpdateDidResample() : false;
+        vm.pfEss = particleFilter ? particleFilter->getLastEss() : 0.0;
+        vm.pfAverageWeight = particleFilter ? particleFilter->getLastAverageWeight() : 0.0;
+        vm.pfRecoveryFraction = particleFilter ? particleFilter->getLastRecoveryFraction() : 0.0f;
+
+        vm.distanceSensors[0] = sampleDistanceSensor("LEFT", uiDistLeft);
+        vm.distanceSensors[1] = sampleDistanceSensor("RIGHT", uiDistRight);
+        vm.distanceSensors[2] = sampleDistanceSensor("FRONT", uiDistFront);
+        vm.distanceSensors[3] = sampleDistanceSensor("BACK", uiDistBack);
 
         BrainScreen::renderRuntime(vm);
         pros::delay(50);
@@ -356,6 +426,7 @@ static Eigen::Vector3f acquireInitialPose() {
     pros::delay(100);
 
     Eigen::Vector2f lastFieldPos(0.0f, 0.0f);
+    float lastHeadingRad = 0.0f;
     bool hasLast = false;
     int stableCount = 0;
     std::optional<GpsLocalization::FieldReading> lastReading;
@@ -386,14 +457,25 @@ static Eigen::Vector3f acquireInitialPose() {
         }
 
         if (hasLast) {
-            const float drift = (reading->sensorFieldPos - lastFieldPos).norm();
-            if (drift < CONFIG::STARTUP_GPS_READY_ERROR.convert(meter)) {
+            const float positionDrift = (reading->sensorFieldPos - lastFieldPos).norm();
+            bool stable = positionDrift < CONFIG::STARTUP_GPS_READY_ERROR.convert(meter);
+            if (requireGpsHeadingDuringPoll) {
+                const float headingDrift = std::fabs(
+                    wrapAngleRad(reading->robotHeadingRad - lastHeadingRad));
+                stable = stable &&
+                    headingDrift < CONFIG::STARTUP_GPS_READY_HEADING.convert(radian);
+            }
+
+            if (stable) {
                 ++stableCount;
             } else {
                 stableCount = 0;
             }
         }
         lastFieldPos = reading->sensorFieldPos;
+        if (reading->hasHeading) {
+            lastHeadingRad = reading->robotHeadingRad;
+        }
         hasLast = true;
         lastReading = reading;
 
@@ -427,8 +509,8 @@ static Eigen::Vector3f acquireInitialPose() {
     // Validate final pose is finite before returning
     auto safeReturn = [&](const Eigen::Vector3f& pose) -> Eigen::Vector3f {
         if (LocMath::isFinitePose(pose)) {
-            std::printf("[INIT] startup pose: (%.3f, %.3f, %.2f)\n",
-                        pose.x(), pose.y(), pose.z());
+            std::printf("[INIT] startup pose: (%.3f, %.3f, %.1fdeg compass)\n",
+                        pose.x(), pose.y(), headingToCompassDeg(pose.z()));
             return pose;
         }
         std::printf("[INIT] startup pose non-finite, using config\n");
@@ -588,6 +670,20 @@ static void buildAutonCommand() {
         context);
 }
 
+static void scheduleSelectedAuton() {
+    buildAutonCommand();
+    if (autonCommand) {
+        CommandScheduler::schedule(autonCommand.get());
+    }
+}
+
+static void launchSelectedAutonFromDriverControl() {
+    if (autonCommand && autonCommand->isScheduled()) {
+        return;
+    }
+    scheduleSelectedAuton();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PROS lifecycle entrypoints
 // ═══════════════════════════════════════════════════════════════════════════
@@ -599,6 +695,7 @@ static void buildAutonCommand() {
  */
 void initialize() {
     // 1. LCD on — show first frame
+    firstInitScreenMs = 0;
     BrainScreen::initialize();
     renderInitStage(0.0f, "Boot", "Booting...");
     AutonSelector::selectAuton(DEFAULT_AUTON_SELECTION);
@@ -612,6 +709,10 @@ void initialize() {
         drivetrain->calibrateImu();
     }
     uiGps = std::make_unique<pros::Gps>(CONFIG::MCL_GPS_PORT);
+    uiDistLeft = std::make_unique<pros::Distance>(CONFIG::MCL_LEFT_DISTANCE_PORT);
+    uiDistRight = std::make_unique<pros::Distance>(CONFIG::MCL_RIGHT_DISTANCE_PORT);
+    uiDistFront = std::make_unique<pros::Distance>(CONFIG::MCL_FRONT_DISTANCE_PORT);
+    uiDistBack = std::make_unique<pros::Distance>(CONFIG::MCL_BACK_DISTANCE_PORT);
 
     // 3. Localization (includes GPS poll with inline screen updates)
     renderInitStage(0.25f, "Init localization", "Preparing sensor models");
@@ -623,7 +724,18 @@ void initialize() {
 
     // 5. Done — register selector buttons and rumble
     renderInitStage(1.0f, "Ready", "Controller rumble + start tasks");
+
+    const uint32_t now = pros::millis();
+    const uint32_t visibleFor = (firstInitScreenMs == 0 || now < firstInitScreenMs)
+        ? 0
+        : (now - firstInitScreenMs);
+    if (visibleFor < CONFIG::STARTUP_SCREEN_MIN_VISIBLE_ms) {
+        pros::delay(CONFIG::STARTUP_SCREEN_MIN_VISIBLE_ms - visibleFor);
+    }
+    pros::delay(CONFIG::STARTUP_READY_HOLD_ms);
+
     AutonSelector::init();
+    ScreenManagerUI::init();
     screenStatus = "Ready";
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
@@ -641,10 +753,7 @@ void competition_initialize() {
 }
 
 void autonomous() {
-    buildAutonCommand();
-    if (autonCommand) {
-        CommandScheduler::schedule(autonCommand.get());
-    }
+    scheduleSelectedAuton();
 }
 
 void opcontrol() {
@@ -657,18 +766,16 @@ void opcontrol() {
     }
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
-    pros::Controller partner(pros::E_CONTROLLER_PARTNER);
-
     IntakeSpinCommand intakeInCommand(intakes, 127);
     IntakeSpinCommand intakeOutCommand(intakes, -127);
-
-    if (AutonSelector::getAuton() == Auton::SKILLS && autonCommand) {
-        CommandScheduler::schedule(autonCommand.get());
-    }
+    bool downBAutonLatch = false;
 
     while (true) {
         const bool r1Held = master.get_digital(DIGITAL_R1);
         const bool r2Held = master.get_digital(DIGITAL_R2);
+        const bool downHeld = master.get_digital(DIGITAL_DOWN);
+        const bool bHeld = master.get_digital(DIGITAL_B);
+        const bool downBHeld = downHeld && bHeld;
 
         // Preserve command-based intake ownership while polling buttons directly.
         if (r2Held) {
@@ -703,15 +810,15 @@ void opcontrol() {
         if (master.get_digital_new_press(DIGITAL_A)) {
             solenoids->toggleSelect1();
         }
-        if (master.get_digital_new_press(DIGITAL_B)) {
+        if (!downHeld && master.get_digital_new_press(DIGITAL_B)) {
             solenoids->toggleSelect2();
         }
 
-        if (AutonSelector::getAuton() == Auton::SKILLS &&
-            autonCommand && autonCommand->isScheduled() &&
-            partner.get_digital(DIGITAL_RIGHT)) {
-            autonCommand->cancel();
+        if (downBHeld && !downBAutonLatch &&
+            !pros::competition::is_connected()) {
+            launchSelectedAutonFromDriverControl();
         }
+        downBAutonLatch = downBHeld;
 
         float forward = static_cast<float>(
             master.get_analog(ANALOG_LEFT_Y));

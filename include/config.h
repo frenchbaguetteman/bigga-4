@@ -356,15 +356,19 @@ inline constexpr QAngle START_POSE_THETA = QAngle(gpsHeadingDegToInternalRad(STA
 constexpr bool START_POSE_KNOWN = false;
 
 constexpr StartupPoseMode STARTUP_POSE_MODE =
-    StartupPoseMode::GPSXYPlusIMUHeading;
+    StartupPoseMode::FullGPSInit;
 
 // GPS readiness gate used at boot
 constexpr uint32_t STARTUP_GPS_MAX_WAIT_ms      = 8000;
 constexpr float    STARTUP_GPS_READY_ERROR_in   = 0.787402f;
+constexpr float    STARTUP_GPS_READY_HEADING_deg = 5.0f;
 constexpr int      STARTUP_GPS_STABLE_SAMPLES   = 6;
+constexpr uint32_t STARTUP_SCREEN_MIN_VISIBLE_ms = 1200;
+constexpr uint32_t STARTUP_READY_HOLD_ms         = 500;
 
 inline constexpr QTime STARTUP_GPS_MAX_WAIT = static_cast<float>(STARTUP_GPS_MAX_WAIT_ms) * millisecond;
 inline constexpr QLength STARTUP_GPS_READY_ERROR = STARTUP_GPS_READY_ERROR_in * inch;
+inline constexpr QAngle STARTUP_GPS_READY_HEADING = STARTUP_GPS_READY_HEADING_deg * degree;
 
 // ── Odom Debug Diagnostics ──────────────────────────────────────────────────
 

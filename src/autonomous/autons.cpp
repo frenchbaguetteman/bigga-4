@@ -1,23 +1,17 @@
 #include "autonomous/autonCommands.h"
 
-#include "autonomous/sharedCommands.h"
-#include "command/commandGroup.h"
+#include "autonomous/chassis.h"
+#include "command/command.h"
 #include "command/instantCommand.h"
-#include "command/waitCommand.h"
-#include "commands/driveMove.h"
-#include "commands/intake/intakeCommand.h"
-#include "commands/ramsete.h"
-#include "commands/rotate.h"
-#include "motionProfiling/motionProfile.h"
+#include "pros/rtos.hpp"
 
+#include <atomic>
 #include <cmath>
-#include <initializer_list>
 #include <memory>
 
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kInToM = 0.0254f;
+constexpr double kMToIn = 39.37007874015748;
 
 const std::vector<Auton> kAvailableAutons = {
     Auton::NEGATIVE_1,
@@ -31,161 +25,227 @@ const std::vector<Auton> kAvailableAutons = {
     Auton::NONE,
 };
 
-float wrapRadians(float radians) {
-    return std::atan2(std::sin(radians), std::cos(radians));
+struct RoutineContext {
+    Chassis& chassis;
+    Intakes* intakes = nullptr;
+    Lift* lift = nullptr;
+    Solenoids* solenoids = nullptr;
+    std::function<Eigen::Vector3f()> poseSource;
+};
+
+using RoutineFn = void (*)(RoutineContext&);
+
+double metersToInches(float meters) {
+    return static_cast<double>(meters) * kMToIn;
 }
 
-Eigen::Vector3f basePose(const AutonBuildContext& ctx) {
-    if (!ctx.poseSource) {
-        return Eigen::Vector3f(0.0f, 0.0f, 0.0f);
-    }
-
-    const Eigen::Vector3f pose = ctx.poseSource();
-    if (!std::isfinite(pose.x()) || !std::isfinite(pose.y()) || !std::isfinite(pose.z())) {
-        return Eigen::Vector3f(0.0f, 0.0f, 0.0f);
-    }
-    return pose;
+ez::pose fieldPoseInches(double xInches, double yInches) {
+    return ez::pose{xInches, yInches};
 }
 
-Eigen::Vector2f robotRelativePoint(const Eigen::Vector3f& pose, float forwardM, float leftM) {
-    const float cosT = std::cos(pose.z());
-    const float sinT = std::sin(pose.z());
-    return Eigen::Vector2f(
-        pose.x() + forwardM * cosT - leftM * sinT,
-        pose.y() + forwardM * sinT + leftM * cosT);
-}
+ez::pose robotRelativePoint(const Eigen::Vector3f& pose, double forwardIn, double leftIn) {
+    const double poseXIn = metersToInches(pose.x());
+    const double poseYIn = metersToInches(pose.y());
+    const double cosT = std::cos(pose.z());
+    const double sinT = std::sin(pose.z());
 
-Eigen::Vector3f robotRelativePose(const Eigen::Vector3f& pose,
-                                  float forwardM,
-                                  float leftM,
-                                  float headingDeltaRad) {
-    const Eigen::Vector2f point = robotRelativePoint(pose, forwardM, leftM);
-    return Eigen::Vector3f(point.x(), point.y(), wrapRadians(pose.z() + headingDeltaRad));
-}
-
-MotionProfile buildProfile(std::initializer_list<Eigen::Vector3f> waypoints,
-                           float maxVelocityMps,
-                           float maxAccelerationMps2) {
-    Path path;
-    for (const auto& waypoint : waypoints) {
-        path.addWaypoint({waypoint.x(), waypoint.y(), waypoint.z()});
-    }
-
-    ProfileConstraints constraints{
-        QSpeed(maxVelocityMps),
-        QAcceleration(maxAccelerationMps2),
+    return ez::pose{
+        poseXIn + forwardIn * cosT - leftIn * sinT,
+        poseYIn + forwardIn * sinT + leftIn * cosT,
     };
-    TrapezoidalVelocityProfile velocityProfile(QLength(path.totalLength()), constraints);
-    return MotionProfile(path, velocityProfile);
 }
 
-std::unique_ptr<Command> makeNegative1(const AutonBuildContext& ctx) {
-    MotionProfile profile = buildProfile({
-        Eigen::Vector3f(-1.2f, -0.6f, 0.0f),
-        Eigen::Vector3f(-0.6f, -0.6f, 0.0f),
-        Eigen::Vector3f( 0.0f, -0.3f, 0.5f),
-    }, 1.2f, 2.0f);
-
-    return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-        (new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource))
-            ->alongWith(new IntakeSpinCommand(ctx.intakes, 127)),
-        new WaitCommand(0.3f),
-        shared::outtakeTimed(ctx.intakes, 0.5f),
-        new RotateCommand(ctx.drivetrain, kPi, ctx.poseSource),
-        new DriveMoveCommand(ctx.drivetrain, Eigen::Vector2f(-1.2f, -0.6f), ctx.poseSource),
-    });
+void intakeTimed(Intakes* intakes, int voltage, int milliseconds) {
+    if (!intakes) return;
+    intakes->spin(voltage);
+    pros::delay(milliseconds);
+    intakes->stop();
 }
 
-std::unique_ptr<Command> makePositive1(const AutonBuildContext& ctx) {
-    MotionProfile profile = buildProfile({
-        Eigen::Vector3f(1.2f, -0.6f, kPi),
-        Eigen::Vector3f(0.6f, -0.6f, kPi),
-        Eigen::Vector3f(0.0f, -0.3f, kPi - 0.5f),
-    }, 1.2f, 2.0f);
+void runNegative1(RoutineContext& ctx) {
+    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.chassis.pid_odom_set({
+        {{-47.24, -23.62}, ez::fwd, 102},
+        {{-23.62, -23.62}, ez::fwd, 102},
+        {{0.0, -11.81}, ez::fwd, 102},
+    }, true);
+    ctx.chassis.pid_wait();
 
-    return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-        (new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource))
-            ->alongWith(new IntakeSpinCommand(ctx.intakes, 127)),
-        new WaitCommand(0.3f),
-        shared::outtakeTimed(ctx.intakes, 0.5f),
-        new RotateCommand(ctx.drivetrain, 0.0f, ctx.poseSource),
-        new DriveMoveCommand(ctx.drivetrain, Eigen::Vector2f(1.2f, -0.6f), ctx.poseSource),
-    });
+    pros::delay(300);
+    intakeTimed(ctx.intakes, -127, 500);
+
+    ctx.chassis.pid_turn_set(180.0, 96);
+    ctx.chassis.pid_wait();
+
+    ctx.chassis.pid_odom_set(fieldPoseInches(-47.24, -23.62), ez::fwd, 96);
+    ctx.chassis.pid_wait();
 }
 
-std::unique_ptr<Command> makeSkills(const AutonBuildContext& ctx) {
-    auto makeSegment = [&](float x1, float y1, float x2, float y2) -> Command* {
-        const float theta = std::atan2(y2 - y1, x2 - x1);
-        MotionProfile segment = buildProfile({
-            Eigen::Vector3f(x1, y1, theta),
-            Eigen::Vector3f(x2, y2, theta),
-        }, 1.5f, 2.5f);
-        return new RamseteCommand(ctx.drivetrain, segment, ctx.poseSource);
-    };
+void runPositive1(RoutineContext& ctx) {
+    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.chassis.pid_odom_set({
+        {{47.24, -23.62}, ez::fwd, 102},
+        {{23.62, -23.62}, ez::fwd, 102},
+        {{0.0, -11.81}, ez::fwd, 102},
+    }, true);
+    ctx.chassis.pid_wait();
 
-    return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-        makeSegment(-1.4f, -1.4f, -0.3f, -1.4f)
-            ->alongWith(new IntakeSpinCommand(ctx.intakes, 127)),
-        shared::outtakeTimed(ctx.intakes, 0.4f),
-        makeSegment(-0.3f, -1.4f, -0.3f, 0.0f),
-        shared::driveAndIntake(
+    pros::delay(300);
+    intakeTimed(ctx.intakes, -127, 500);
+
+    ctx.chassis.pid_turn_set(0.0, 96);
+    ctx.chassis.pid_wait();
+
+    ctx.chassis.pid_odom_set(fieldPoseInches(47.24, -23.62), ez::fwd, 96);
+    ctx.chassis.pid_wait();
+}
+
+void runSkills(RoutineContext& ctx) {
+    if (ctx.intakes) ctx.intakes->spin(127);
+
+    ctx.chassis.pid_odom_set(fieldPoseInches(-11.81, -55.12), ez::fwd, 127);
+    ctx.chassis.pid_wait();
+    intakeTimed(ctx.intakes, -127, 400);
+
+    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.chassis.pid_odom_set(fieldPoseInches(-11.81, 0.0), ez::fwd, 110);
+    ctx.chassis.pid_wait();
+    ctx.chassis.pid_odom_set(fieldPoseInches(11.81, 0.0), ez::fwd, 96);
+    ctx.chassis.pid_wait();
+    intakeTimed(ctx.intakes, -127, 400);
+
+    if (ctx.lift) {
+        ctx.lift->moveTo(180.0f);
+        pros::delay(150);
+        ctx.lift->moveTo(0.0f);
+    }
+
+    ctx.chassis.pid_odom_set(fieldPoseInches(47.24, 39.37), ez::fwd, 110);
+    ctx.chassis.pid_wait();
+    intakeTimed(ctx.intakes, -127, 500);
+
+    ctx.chassis.pid_odom_set(fieldPoseInches(0.0, 0.0), ez::fwd, 96);
+    ctx.chassis.pid_wait();
+}
+
+void runExampleMove(RoutineContext& ctx) {
+    const Eigen::Vector3f startPose =
+        ctx.poseSource ? ctx.poseSource() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+    const ez::pose diagonal = robotRelativePoint(startPose, 24.0, 18.0);
+    const ez::pose home{metersToInches(startPose.x()), metersToInches(startPose.y())};
+
+    ctx.chassis.pid_drive_set(24.0, 110);
+    ctx.chassis.pid_wait();
+    ctx.chassis.pid_odom_set(diagonal, ez::fwd, 110);
+    ctx.chassis.pid_wait();
+    ctx.chassis.pid_odom_set(home, ez::fwd, 110);
+    ctx.chassis.pid_wait();
+}
+
+void runExampleTurn(RoutineContext& ctx) {
+    ctx.chassis.pid_turn_set(90.0, 90);
+    ctx.chassis.pid_wait();
+    ctx.chassis.pid_turn_set(-90.0, 90);
+    ctx.chassis.pid_wait();
+    ctx.chassis.pid_turn_set(180.0, 90);
+    ctx.chassis.pid_wait();
+    ctx.chassis.pid_turn_set(0.0, 90);
+    ctx.chassis.pid_wait();
+}
+
+void runExamplePath(RoutineContext& ctx) {
+    const Eigen::Vector3f start =
+        ctx.poseSource ? ctx.poseSource() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+    const ez::pose p0{metersToInches(start.x()), metersToInches(start.y())};
+    const ez::pose p1 = robotRelativePoint(start, 18.0, 10.0);
+    const ez::pose p2 = robotRelativePoint(start, 36.0, -8.0);
+    const ez::pose p3 = robotRelativePoint(start, 48.0, 0.0);
+
+    if (ctx.intakes) ctx.intakes->spin(96);
+    ctx.chassis.pid_odom_set({
+        {p1, ez::fwd, 96},
+        {p2, ez::fwd, 96},
+        {p3, ez::fwd, 96},
+    }, true);
+    ctx.chassis.pid_wait();
+    intakeTimed(ctx.intakes, -127, 300);
+    ctx.chassis.pid_odom_set(p0, ez::fwd, 96);
+    ctx.chassis.pid_wait();
+}
+
+class AutonRoutineCommand : public Command {
+public:
+    AutonRoutineCommand(const AutonBuildContext& ctx, RoutineFn routine) {
+        auto state = std::make_shared<State>();
+        state->intakes = ctx.intakes;
+        state->lift = ctx.lift;
+        state->solenoids = ctx.solenoids;
+        state->poseSource = ctx.poseSource;
+        state->routine = routine;
+        state->chassis = std::make_shared<Chassis>(
             ctx.drivetrain,
-            ctx.intakes,
-            Eigen::Vector2f(0.3f, 0.0f),
-            ctx.poseSource),
-        shared::outtakeTimed(ctx.intakes, 0.4f),
-        shared::liftCycle(ctx.lift, 180.0f, 0.0f),
-        makeSegment(0.3f, 0.0f, 1.2f, 1.0f),
-        shared::outtakeTimed(ctx.intakes, 0.5f),
-        new DriveMoveCommand(ctx.drivetrain, Eigen::Vector2f(0.0f, 0.0f), ctx.poseSource),
-    });
-}
+            ctx.poseSource,
+            [state]() {
+                return state->cancelRequested.load();
+            });
+        m_state = std::move(state);
+    }
 
-std::unique_ptr<Command> makeExampleMove(const AutonBuildContext& ctx) {
-    const Eigen::Vector3f start = basePose(ctx);
-    const Eigen::Vector2f forward = robotRelativePoint(start, 24.0f * kInToM, 0.0f);
-    const Eigen::Vector2f diagonal = robotRelativePoint(start, 24.0f * kInToM, 18.0f * kInToM);
-    const Eigen::Vector2f home = start.head<2>();
+    void initialize() override {
+        auto state = m_state;
+        state->finished.store(false);
+        state->cancelRequested.store(false);
 
-    return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-        new DriveMoveCommand(ctx.drivetrain, forward, ctx.poseSource),
-        new WaitCommand(0.2f),
-        new DriveMoveCommand(ctx.drivetrain, diagonal, ctx.poseSource),
-        new WaitCommand(0.2f),
-        new DriveMoveCommand(ctx.drivetrain, home, ctx.poseSource),
-    });
-}
+        pros::Task::create([state]() {
+            if (state->routine) {
+                state->chassis->pid_targets_reset();
+                RoutineContext ctx{
+                    *state->chassis,
+                    state->intakes,
+                    state->lift,
+                    state->solenoids,
+                    state->poseSource,
+                };
+                state->routine(ctx);
+            }
+            state->chassis->cancel_motion();
+            state->finished.store(true);
+        }, "auton-routine");
+    }
 
-std::unique_ptr<Command> makeExampleTurn(const AutonBuildContext& ctx) {
-    const Eigen::Vector3f start = basePose(ctx);
+    void execute() override {}
 
-    return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-        new RotateCommand(ctx.drivetrain, wrapRadians(start.z() + 0.5f * kPi), ctx.poseSource),
-        new WaitCommand(0.2f),
-        new RotateCommand(ctx.drivetrain, wrapRadians(start.z() - 0.5f * kPi), ctx.poseSource),
-        new WaitCommand(0.2f),
-        new RotateCommand(ctx.drivetrain, wrapRadians(start.z() + kPi), ctx.poseSource),
-        new WaitCommand(0.2f),
-        new RotateCommand(ctx.drivetrain, start.z(), ctx.poseSource),
-    });
-}
+    void end(bool interrupted) override {
+        if (!m_state) return;
+        if (interrupted) {
+            m_state->cancelRequested.store(true);
+        }
+        if (m_state->chassis) {
+            m_state->chassis->cancel_motion();
+        }
+    }
 
-std::unique_ptr<Command> makeExamplePath(const AutonBuildContext& ctx) {
-    const Eigen::Vector3f start = basePose(ctx);
-    MotionProfile profile = buildProfile({
-        robotRelativePose(start, 0.0f * kInToM, 0.0f * kInToM, 0.0f),
-        robotRelativePose(start, 18.0f * kInToM, 10.0f * kInToM, 0.35f),
-        robotRelativePose(start, 36.0f * kInToM, -8.0f * kInToM, -0.25f),
-        robotRelativePose(start, 48.0f * kInToM, 0.0f * kInToM, 0.0f),
-    }, 1.0f, 1.8f);
+    bool isFinished() override {
+        return !m_state || m_state->finished.load();
+    }
 
-    return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-        (new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource))
-            ->alongWith(new IntakeSpinCommand(ctx.intakes, 96)),
-        new WaitCommand(0.2f),
-        shared::outtakeTimed(ctx.intakes, 0.3f),
-        new DriveMoveCommand(ctx.drivetrain, start.head<2>(), ctx.poseSource),
-    });
+private:
+    struct State {
+        std::shared_ptr<Chassis> chassis;
+        Intakes* intakes = nullptr;
+        Lift* lift = nullptr;
+        Solenoids* solenoids = nullptr;
+        std::function<Eigen::Vector3f()> poseSource;
+        RoutineFn routine = nullptr;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> cancelRequested{false};
+    };
+
+    std::shared_ptr<State> m_state;
+};
+
+std::unique_ptr<Command> makeRoutineCommand(const AutonBuildContext& ctx, RoutineFn routine) {
+    return std::make_unique<AutonRoutineCommand>(ctx, routine);
 }
 
 } // namespace
@@ -222,21 +282,21 @@ namespace autonCommands {
 std::unique_ptr<Command> makeAutonCommand(Auton auton, const AutonBuildContext& ctx) {
     switch (auton) {
         case Auton::NEGATIVE_1:
-            return makeNegative1(ctx);
+            return makeRoutineCommand(ctx, runNegative1);
         case Auton::NEGATIVE_2:
-            return makeNegative1(ctx);
+            return makeRoutineCommand(ctx, runNegative1);
         case Auton::POSITIVE_1:
-            return makePositive1(ctx);
+            return makeRoutineCommand(ctx, runPositive1);
         case Auton::POSITIVE_2:
-            return makePositive1(ctx);
+            return makeRoutineCommand(ctx, runPositive1);
         case Auton::EXAMPLE_MOVE:
-            return makeExampleMove(ctx);
+            return makeRoutineCommand(ctx, runExampleMove);
         case Auton::EXAMPLE_TURN:
-            return makeExampleTurn(ctx);
+            return makeRoutineCommand(ctx, runExampleTurn);
         case Auton::EXAMPLE_PATH:
-            return makeExamplePath(ctx);
+            return makeRoutineCommand(ctx, runExamplePath);
         case Auton::SKILLS:
-            return makeSkills(ctx);
+            return makeRoutineCommand(ctx, runSkills);
         case Auton::NONE:
         default:
             return std::make_unique<InstantCommand>([]() {});
