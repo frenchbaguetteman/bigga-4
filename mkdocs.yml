@@ -57,6 +57,7 @@ nav:
       - Autonomous Cookbook: AUTONOMOUS_COOKBOOK.md
   - Match Ops:
       - User Guide: USER_GUIDE.md
+      - Localization Screen Mockup: LOCALIZATION_SCREEN_MOCKUP.md
       - Motion Reference: MOTION_REFERENCE.md
   - Engineering:
       - API Reference:

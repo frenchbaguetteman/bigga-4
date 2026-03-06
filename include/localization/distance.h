@@ -172,6 +172,7 @@ private:
         const float sensorTheta = robotTheta + m_offset.z();
         const float dx = std::cos(sensorTheta);
         const float dy = std::sin(sensorTheta);
+        const float sensorHeight = CONFIG::MCL_DISTANCE_SENSOR_HEIGHT.convert(meter);
 
         float minDist = std::numeric_limits<float>::infinity();
 
@@ -197,15 +198,13 @@ private:
 
         if (CONFIG::MCL_ENABLE_FIELD_OBSTACLES) {
             for (const auto& obstacle : CONFIG::MCL_FIELD_OBSTACLES) {
-                const float candidate = rayAabbDistance(
+                const float candidate = rayObstacleDistance(
                     sx,
                     sy,
                     dx,
                     dy,
-                    obstacle.minX,
-                    obstacle.maxX,
-                    obstacle.minY,
-                    obstacle.maxY);
+                    sensorHeight,
+                    obstacle);
                 if (LocMath::isFinite(candidate) && candidate > 0.001f) {
                     minDist = std::min(minDist, candidate);
                 }
@@ -218,6 +217,37 @@ private:
         }
 
         return minDist;
+    }
+
+    static float rayObstacleDistance(float sx,
+                                     float sy,
+                                     float dx,
+                                     float dy,
+                                     float sensorHeight,
+                                     const CONFIG::FieldObstacle& obstacle) {
+        if (sensorHeight < obstacle.minZ || sensorHeight > obstacle.maxZ) {
+            return std::numeric_limits<float>::infinity();
+        }
+
+        const float relX = sx - obstacle.centerX;
+        const float relY = sy - obstacle.centerY;
+        const float cosT = std::cos(obstacle.headingRad);
+        const float sinT = std::sin(obstacle.headingRad);
+
+        const float localSx = relX * cosT + relY * sinT;
+        const float localSy = -relX * sinT + relY * cosT;
+        const float localDx = dx * cosT + dy * sinT;
+        const float localDy = -dx * sinT + dy * cosT;
+
+        return rayAabbDistance(
+            localSx,
+            localSy,
+            localDx,
+            localDy,
+            -obstacle.halfSizeX,
+            obstacle.halfSizeX,
+            -obstacle.halfSizeY,
+            obstacle.halfSizeY);
     }
 
     static float rayAabbDistance(float sx,

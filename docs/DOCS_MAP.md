@@ -16,6 +16,7 @@ python3 -m mkdocs serve
 - [AUTONOMOUS_COOKBOOK.md](AUTONOMOUS_COOKBOOK.md): copyable autonomous patterns, examples, and snippets
 - [TUTORIALS.md](TUTORIALS.md): task-first workflows for tuning, localization debugging, editing autons, and uploads
 - [USER_GUIDE.md](USER_GUIDE.md): competition-day operations, controls, hardware map, startup, and major caveats
+- [LOCALIZATION_SCREEN_MOCKUP.md](LOCALIZATION_SCREEN_MOCKUP.md): docs-side visual mockup of the brain-screen localization page
 - [MOTION_REFERENCE.md](MOTION_REFERENCE.md): every implemented teleop motion and autonomous routine, step by step
 
 ## Engineering References

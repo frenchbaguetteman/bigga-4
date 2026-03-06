@@ -111,6 +111,22 @@ static Eigen::Vector2f moveTowardsVec2(const Eigen::Vector2f& current,
     return current + delta * (maxStep / dist);
 }
 
+static Eigen::Vector2f applyTargetDeadband(const Eigen::Vector2f& current,
+                                           const Eigen::Vector2f& target,
+                                           float deadband) {
+    if (!LocMath::isFiniteVec2(current) ||
+        !LocMath::isFiniteVec2(target) ||
+        deadband <= 0.0f) {
+        return target;
+    }
+
+    const Eigen::Vector2f delta = target - current;
+    if (delta.norm() <= deadband) {
+        return current;
+    }
+    return target;
+}
+
 static std::optional<GpsPoseSample> poseSampleFromReading(
     const GpsLocalization::FieldReading& reading) {
     if (!reading.hasHeading) return std::nullopt;
@@ -161,6 +177,7 @@ static Eigen::Vector3f computeCombinedPose() {
     Eigen::Vector2f targetCorrection = combinedCorrection;
     float maxCorrection = 0.0f;
     float maxStep = 0.0f;
+    float correctionDeadband = 0.0f;
 
     const std::optional<GpsPoseSample> gpsSample = sampleGpsPose();
     if (still && gpsSample &&
@@ -170,6 +187,7 @@ static Eigen::Vector3f computeCombinedPose() {
             gpsSample->pose.y() - odom.y());
         maxCorrection = CONFIG::LOC_GPS_CORRECTION_MAX.convert(meter);
         maxStep = CONFIG::LOC_GPS_CORRECTION_STEP.convert(meter);
+        correctionDeadband = CONFIG::LOC_GPS_CORRECTION_DEADBAND.convert(meter);
         haveTarget = true;
     } else if (!still && particleFilter) {
         const Eigen::Vector3f pf = particleFilter->getPrediction();
@@ -191,12 +209,17 @@ static Eigen::Vector3f computeCombinedPose() {
             targetCorrection = pfCorrection;
             maxCorrection = CONFIG::LOC_MCL_CORRECTION_MAX.convert(meter);
             maxStep = CONFIG::LOC_MCL_CORRECTION_STEP.convert(meter);
+            correctionDeadband = CONFIG::LOC_MCL_CORRECTION_DEADBAND.convert(meter);
             haveTarget = true;
         }
     }
 
     if (haveTarget) {
         targetCorrection = clampVectorMagnitude(targetCorrection, maxCorrection);
+        targetCorrection = applyTargetDeadband(
+            combinedCorrection,
+            targetCorrection,
+            correctionDeadband);
         combinedCorrection = moveTowardsVec2(combinedCorrection, targetCorrection, maxStep);
     } else if (!LocMath::isFiniteVec2(combinedCorrection)) {
         combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
@@ -407,6 +430,8 @@ static void subsystemInit() {
  * Falls back to config if it doesn't lock.
  */
 static Eigen::Vector3f acquireInitialPose() {
+    const float defaultImuHeadingRad = CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian);
+
     // Fallback pose from config (inches → metres, compass-deg → internal-rad)
     Eigen::Vector3f configPose(
         CONFIG::START_POSE_X.convert(meter),
@@ -419,10 +444,10 @@ static Eigen::Vector3f acquireInitialPose() {
     }
 
     // IMU heading is only relative until we explicitly seed it into the field frame.
-    // For GPSXY+IMU startup, use the configured start heading as that field reference,
+    // For GPSXY+IMU startup, use the configured IMU init heading as that field reference,
     // then preserve any real rotation that happens during GPS lock acquisition.
     if (CONFIG::STARTUP_POSE_MODE == CONFIG::StartupPoseMode::GPSXYPlusIMUHeading && drivetrain) {
-        drivetrain->resetHeading(configPose.z());
+        drivetrain->resetHeading(defaultImuHeadingRad);
         pros::delay(20);
     }
 
@@ -632,6 +657,8 @@ static void localizationInit() {
     }
     std::printf("[LOC_CONFIG] Start Pose: (%.3f, %.3f, %.3f rad)\n",
         startPose.x(), startPose.y(), startPose.z());
+    std::printf("[LOC_CONFIG] Default IMU Init Heading: %.1f deg compass\n",
+        CONFIG::DEFAULT_IMU_INIT_ANGLE_deg);
     std::printf("[LOC_CONFIG] GPS Hard Reject Threshold: %.3f in\n", CONFIG::GPS_ERROR_THRESHOLD_in);
     std::printf("[LOC_CONFIG] GPS Sensor Enabled: %s\n",
         CONFIG::MCL_ENABLE_GPS_SENSOR ? "YES" : "NO");
@@ -711,6 +738,7 @@ void initialize() {
     renderInitStage(0.18f, "Init subsystems", "Calibrating IMU");
     if (drivetrain) {
         drivetrain->calibrateImu();
+        drivetrain->resetHeading(CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian));
     }
     uiGps = std::make_unique<pros::Gps>(CONFIG::MCL_GPS_PORT);
     uiDistLeft = std::make_unique<pros::Distance>(CONFIG::MCL_LEFT_DISTANCE_PORT);

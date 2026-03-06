@@ -16,7 +16,7 @@ static constexpr UITheme::Rect FIELD_PANEL = UITheme::makeRect(12, UITheme::kCon
 static constexpr UITheme::Rect TELEMETRY_PANEL = UITheme::makeRect(248, UITheme::kContentY + 36, 220, 166);
 
 static constexpr int MAP_PX = 140;
-static constexpr float FIELD_M = 3.6576f;
+static constexpr float FIELD_M = 2.0f * CONFIG::FIELD_HALF_SIZE_in * CONFIG::IN_TO_M;
 static constexpr float SCALE = MAP_PX / FIELD_M;
 static constexpr int MAP_X0 = FIELD_PANEL.x0 + (UITheme::width(FIELD_PANEL) - MAP_PX) / 2;
 static constexpr int MAP_Y0 = FIELD_PANEL.y0 + 18;
@@ -26,8 +26,14 @@ static constexpr int CY = MAP_Y0 + MAP_PX / 2;
 static constexpr uint32_t COL_FIELD = 0x00141D28;
 static constexpr uint32_t COL_GRID = 0x00253444;
 static constexpr uint32_t COL_FIELD_BORDER = UITheme::kBorderStrong;
+static constexpr uint32_t COL_OBSTACLE_FILL = 0x00343D49;
+static constexpr uint32_t COL_OBSTACLE_BORDER = 0x008798A8;
 static constexpr uint32_t COL_TRAIL_HOT = UITheme::kAmber;
 static constexpr uint32_t COL_TRAIL_COOL = UITheme::kBlue;
+static constexpr uint32_t COL_SIGHTLINE = 0x004A657D;
+static constexpr uint32_t COL_SENSOR_RAY = UITheme::kCyan;
+static constexpr uint32_t COL_SENSOR_HIT = UITheme::kWhite;
+static constexpr uint32_t COL_IMU_INIT = 0x00D2DCE7;
 
 static constexpr int TRAIL_MAX = 300;
 struct TrailPoint { int px; int py; };
@@ -43,8 +49,30 @@ struct SourceSpec {
     const char* statusLine = "";
 };
 
+struct ScreenPoint {
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+static ScreenPoint lerpScreenPoint(const ScreenPoint& a,
+                                   const ScreenPoint& b,
+                                   float t) {
+    return ScreenPoint{
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+    };
+}
+
 static int toScreenX(float mX) { return CX + static_cast<int>(mX * SCALE); }
 static int toScreenY(float mY) { return CY - static_cast<int>(mY * SCALE); }
+static ScreenPoint toScreenPoint(const Eigen::Vector2f& point) {
+    return ScreenPoint{
+        static_cast<float>(CX) + point.x() * SCALE,
+        static_cast<float>(CY) - point.y() * SCALE,
+    };
+}
+static int clampMapX(int x) { return std::max(MAP_X0, std::min(MAP_X0 + MAP_PX - 1, x)); }
+static int clampMapY(int y) { return std::max(MAP_Y0, std::min(MAP_Y0 + MAP_PX - 1, y)); }
 
 static float radToDeg(float r) {
     return r * 180.0f / static_cast<float>(M_PI);
@@ -109,6 +137,83 @@ static SourceSpec sourceSpec(const BrainScreen::RuntimeViewModel& vm, Localizati
     }
 }
 
+static bool isFinitePose(const Eigen::Vector3f& pose) {
+    return std::isfinite(pose.x()) &&
+           std::isfinite(pose.y()) &&
+           std::isfinite(pose.z());
+}
+
+static Eigen::Vector2f rotateLocalToField(const Eigen::Vector2f& local, float heading) {
+    const float cosT = std::cos(heading);
+    const float sinT = std::sin(heading);
+    return Eigen::Vector2f(
+        local.x() * cosT - local.y() * sinT,
+        local.x() * sinT + local.y() * cosT);
+}
+
+static void drawFieldObstacle(const CONFIG::FieldObstacle& obstacle) {
+    const Eigen::Vector2f center(obstacle.centerX, obstacle.centerY);
+    const std::array<Eigen::Vector2f, 4> localCorners{{
+        { obstacle.halfSizeX,  obstacle.halfSizeY},
+        { obstacle.halfSizeX, -obstacle.halfSizeY},
+        {-obstacle.halfSizeX, -obstacle.halfSizeY},
+        {-obstacle.halfSizeX,  obstacle.halfSizeY},
+    }};
+
+    std::array<ScreenPoint, 4> corners{};
+    for (size_t i = 0; i < localCorners.size(); ++i) {
+        const Eigen::Vector2f world =
+            center + rotateLocalToField(localCorners[i], obstacle.headingRad);
+        corners[i] = toScreenPoint(world);
+    }
+
+    const int fillSteps = std::max(
+        1,
+        static_cast<int>(std::ceil(std::max(
+            obstacle.halfSizeX,
+            obstacle.halfSizeY) * SCALE * 2.0f)));
+    for (int step = 0; step <= fillSteps; ++step) {
+        const float t = static_cast<float>(step) / static_cast<float>(fillSteps);
+        const ScreenPoint start = lerpScreenPoint(corners[0], corners[1], t);
+        const ScreenPoint end = lerpScreenPoint(corners[3], corners[2], t);
+        UITheme::drawLine(
+            clampMapX(static_cast<int>(std::lround(start.x))),
+            clampMapY(static_cast<int>(std::lround(start.y))),
+            clampMapX(static_cast<int>(std::lround(end.x))),
+            clampMapY(static_cast<int>(std::lround(end.y))),
+            COL_OBSTACLE_FILL);
+    }
+
+    for (size_t i = 0; i < corners.size(); ++i) {
+        const ScreenPoint& a = corners[i];
+        const ScreenPoint& b = corners[(i + 1) % corners.size()];
+        UITheme::drawLine(
+            clampMapX(static_cast<int>(std::lround(a.x))),
+            clampMapY(static_cast<int>(std::lround(a.y))),
+            clampMapX(static_cast<int>(std::lround(b.x))),
+            clampMapY(static_cast<int>(std::lround(b.y))),
+            COL_OBSTACLE_BORDER);
+    }
+}
+
+static void drawFieldObstacles() {
+    for (const auto& obstacle : CONFIG::MCL_FIELD_OBSTACLES) {
+        drawFieldObstacle(obstacle);
+    }
+}
+
+static void drawImuInitReference() {
+    const int baseX = MAP_X0 + 10;
+    const int baseY = MAP_Y0 + 10;
+    const float heading = CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian);
+    const int tipX = clampMapX(baseX + static_cast<int>(std::lround(std::cos(heading) * 10.0f)));
+    const int tipY = clampMapY(baseY - static_cast<int>(std::lround(std::sin(heading) * 10.0f)));
+
+    UITheme::drawLine(baseX, baseY, tipX, tipY, COL_IMU_INIT);
+    pros::screen::set_pen(COL_IMU_INIT);
+    pros::screen::fill_circle(baseX, baseY, 2);
+}
+
 static void drawFieldBase(const SourceSpec& spec) {
     UITheme::drawPanel(FIELD_PANEL, UITheme::kPanelAlt, UITheme::kBorderStrong, spec.accent);
     UITheme::printTextf(pros::E_TEXT_SMALL, FIELD_PANEL.x0 + 12, FIELD_PANEL.y0 + 8,
@@ -134,6 +239,8 @@ static void drawFieldBase(const SourceSpec& spec) {
                                     MAP_X0 + MAP_PX - 1, MAP_Y0 + tilePx}, UITheme::kBlueDeep);
     UITheme::fillRect(UITheme::Rect{MAP_X0 + MAP_PX - tilePx - 1, MAP_Y0 + MAP_PX - tilePx - 1,
                                     MAP_X0 + MAP_PX - 1, MAP_Y0 + MAP_PX - 1}, UITheme::kBlueDeep);
+    drawFieldObstacles();
+    drawImuInitReference();
     UITheme::outlineRect(mapRect, COL_FIELD_BORDER);
 }
 
@@ -198,11 +305,117 @@ static void drawSensorTile(const UITheme::Rect& r,
                         UITheme::kTextSoft, "c%d", sensor.confidence);
 }
 
-static void drawMapPose(const SourceSpec& spec) {
-    if (!spec.valid ||
-        !std::isfinite(spec.pose.x()) ||
-        !std::isfinite(spec.pose.y()) ||
-        !std::isfinite(spec.pose.z())) {
+static void drawRobotFootprint(const Eigen::Vector3f& pose, uint32_t accent) {
+    const float halfLength = CONFIG::ROBOT_LENGTH.convert(meter) * 0.5f;
+    const float halfWidth = CONFIG::ROBOT_WIDTH.convert(meter) * 0.5f;
+
+    const std::array<Eigen::Vector2f, 4> localCorners{{
+        { halfLength,  halfWidth},
+        { halfLength, -halfWidth},
+        {-halfLength, -halfWidth},
+        {-halfLength,  halfWidth},
+    }};
+
+    std::array<ScreenPoint, 4> corners{};
+    for (size_t i = 0; i < localCorners.size(); ++i) {
+        const Eigen::Vector2f world =
+            pose.head<2>() + rotateLocalToField(localCorners[i], pose.z());
+        corners[i] = toScreenPoint(world);
+    }
+
+    for (size_t i = 0; i < corners.size(); ++i) {
+        const ScreenPoint& a = corners[i];
+        const ScreenPoint& b = corners[(i + 1) % corners.size()];
+        UITheme::drawLine(
+            clampMapX(static_cast<int>(std::lround(a.x))),
+            clampMapY(static_cast<int>(std::lround(a.y))),
+            clampMapX(static_cast<int>(std::lround(b.x))),
+            clampMapY(static_cast<int>(std::lround(b.y))),
+            accent);
+    }
+
+    const Eigen::Vector2f frontCenterWorld =
+        pose.head<2>() + rotateLocalToField(Eigen::Vector2f(halfLength, 0.0f), pose.z());
+    const ScreenPoint center = toScreenPoint(pose.head<2>());
+    const ScreenPoint frontCenter = toScreenPoint(frontCenterWorld);
+    UITheme::drawLine(
+        clampMapX(static_cast<int>(std::lround(center.x))),
+        clampMapY(static_cast<int>(std::lround(center.y))),
+        clampMapX(static_cast<int>(std::lround(frontCenter.x))),
+        clampMapY(static_cast<int>(std::lround(frontCenter.y))),
+        UITheme::kWhite);
+    pros::screen::set_pen(accent);
+    pros::screen::fill_circle(
+        clampMapX(static_cast<int>(std::lround(center.x))),
+        clampMapY(static_cast<int>(std::lround(center.y))),
+        2);
+}
+
+static void drawSensorSightlines(const Eigen::Vector3f& pose,
+                                 const BrainScreen::RuntimeViewModel& vm) {
+    struct SensorRenderSpec {
+        const BrainScreen::RuntimeViewModel::DistanceSensorViewModel* sensor = nullptr;
+        Eigen::Vector3f offset = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+    };
+
+    const std::array<SensorRenderSpec, 4> sensors{{
+        {&vm.distanceSensors[0], CONFIG::DIST_LEFT_OFFSET},
+        {&vm.distanceSensors[1], CONFIG::DIST_RIGHT_OFFSET},
+        {&vm.distanceSensors[2], CONFIG::DIST_FRONT_OFFSET},
+        {&vm.distanceSensors[3], CONFIG::DIST_BACK_OFFSET},
+    }};
+
+    constexpr float kSightlinePreviewM = 0.4064f;  // 16 in
+    const float maxRangeM = CONFIG::MCL_DISTANCE_MAX_RANGE.convert(meter);
+
+    for (const auto& sensorSpec : sensors) {
+        if (!sensorSpec.sensor) continue;
+
+        const Eigen::Vector2f sensorWorld =
+            pose.head<2>() + rotateLocalToField(sensorSpec.offset.head<2>(), pose.z());
+        const float sensorHeading = pose.z() + sensorSpec.offset.z();
+        const Eigen::Vector2f sensorDir(std::cos(sensorHeading), std::sin(sensorHeading));
+
+        const Eigen::Vector2f sightEnd = sensorWorld + sensorDir * kSightlinePreviewM;
+        const ScreenPoint sensorPx = toScreenPoint(sensorWorld);
+        const ScreenPoint sightPx = toScreenPoint(sightEnd);
+        UITheme::drawLine(
+            clampMapX(static_cast<int>(std::lround(sensorPx.x))),
+            clampMapY(static_cast<int>(std::lround(sensorPx.y))),
+            clampMapX(static_cast<int>(std::lround(sightPx.x))),
+            clampMapY(static_cast<int>(std::lround(sightPx.y))),
+            COL_SIGHTLINE);
+
+        pros::screen::set_pen(COL_SIGHTLINE);
+        pros::screen::fill_circle(
+            clampMapX(static_cast<int>(std::lround(sensorPx.x))),
+            clampMapY(static_cast<int>(std::lround(sensorPx.y))),
+            1);
+
+        if (!sensorSpec.sensor->valid) continue;
+
+        const float rayDistance = std::min(sensorSpec.sensor->rangeM, maxRangeM);
+        const Eigen::Vector2f hitWorld = sensorWorld + sensorDir * rayDistance;
+        const ScreenPoint hitPx = toScreenPoint(hitWorld);
+        UITheme::drawLine(
+            clampMapX(static_cast<int>(std::lround(sensorPx.x))),
+            clampMapY(static_cast<int>(std::lround(sensorPx.y))),
+            clampMapX(static_cast<int>(std::lround(hitPx.x))),
+            clampMapY(static_cast<int>(std::lround(hitPx.y))),
+            COL_SENSOR_RAY);
+
+        pros::screen::set_pen(COL_SENSOR_HIT);
+        pros::screen::fill_circle(
+            clampMapX(static_cast<int>(std::lround(hitPx.x))),
+            clampMapY(static_cast<int>(std::lround(hitPx.y))),
+            2);
+    }
+}
+
+static void drawMapPose(const BrainScreen::RuntimeViewModel& vm,
+                        const SourceSpec& spec,
+                        LocalizationView view) {
+    if (!spec.valid || !isFinitePose(spec.pose)) {
         UITheme::printCenteredf(pros::E_TEXT_MEDIUM,
                                 UITheme::Rect{MAP_X0, MAP_Y0, MAP_X0 + MAP_PX - 1, MAP_Y0 + MAP_PX - 1},
                                 MAP_Y0 + MAP_PX / 2 - 8,
@@ -231,14 +444,11 @@ static void drawMapPose(const SourceSpec& spec) {
 
     drawTrail();
 
-    pros::screen::set_pen(spec.accent);
-    pros::screen::fill_circle(rx, ry, 5);
-    pros::screen::set_pen(UITheme::kWhite);
-    pros::screen::draw_circle(rx, ry, 7);
+    if (view == LocalizationView::PureMcl || view == LocalizationView::Combined) {
+        drawSensorSightlines(spec.pose, vm);
+    }
 
-    const int lx = rx + static_cast<int>(std::cos(spec.pose.z()) * 14.0f);
-    const int ly = ry - static_cast<int>(std::sin(spec.pose.z()) * 14.0f);
-    UITheme::drawLine(rx, ry, lx, ly, UITheme::kWhite);
+    drawRobotFootprint(spec.pose, spec.accent);
 }
 
 static void drawOdomDetails(const BrainScreen::RuntimeViewModel& vm) {
@@ -395,7 +605,7 @@ void update(const BrainScreen::RuntimeViewModel& vm, LocalizationView view) {
 
     const SourceSpec spec = sourceSpec(vm, view);
     drawFieldBase(spec);
-    drawMapPose(spec);
+    drawMapPose(vm, spec, view);
 
     UITheme::drawPanel(TELEMETRY_PANEL, UITheme::kPanel, UITheme::kBorderStrong, spec.accent);
     UITheme::printTextf(pros::E_TEXT_SMALL, TELEMETRY_PANEL.x0 + 12, TELEMETRY_PANEL.y0 + 8,

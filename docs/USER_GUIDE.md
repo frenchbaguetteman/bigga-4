@@ -82,6 +82,8 @@ Current driver tuning values in [`include/config.h`](../include/config.h):
 
 The brain screen is a real operator tool, not just a splash page. It is implemented by [`src/ui/brainScreen.cpp`](../src/ui/brainScreen.cpp), [`src/ui/screenManager.cpp`](../src/ui/screenManager.cpp), and related UI files.
 
+If you want the intended docs-side visual layout for the localization page, see [Localization Screen Mockup](LOCALIZATION_SCREEN_MOCKUP.md).
+
 ### Startup Screen
 
 During `initialize()` the screen shows:

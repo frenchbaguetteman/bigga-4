@@ -345,6 +345,15 @@ constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;
 // Set these to where the robot is physically placed at boot.
 // X/Y use the canonical field axes (+X east/forward, +Y north/left).
 // theta stays human-friendly in VEX compass convention: 0° = north, CW positive.
+//
+// `DEFAULT_IMU_INIT_ANGLE_deg` is separate from `START_POSE_THETA_deg`:
+// it seeds the raw IMU into the field frame before localization has locked a
+// pose. This is mainly used by GPSXYPlusIMUHeading startup and for the brief
+// boot window before the final localization pose is applied.
+
+constexpr float DEFAULT_IMU_INIT_ANGLE_deg = 0.0f;
+inline constexpr QAngle DEFAULT_IMU_INIT_ANGLE =
+    QAngle(gpsHeadingDegToInternalRad(DEFAULT_IMU_INIT_ANGLE_deg));
 
 constexpr float START_POSE_X_in       = 0.0f;
 constexpr float START_POSE_Y_in       = 0.0f;
@@ -357,7 +366,7 @@ inline constexpr QAngle START_POSE_THETA = QAngle(gpsHeadingDegToInternalRad(STA
 constexpr bool START_POSE_KNOWN = false;
 
 constexpr StartupPoseMode STARTUP_POSE_MODE =
-    StartupPoseMode::FullGPSInit;
+    StartupPoseMode::GPSXYPlusIMUHeading;
 
 // GPS readiness gate used at boot
 constexpr uint32_t STARTUP_GPS_MAX_WAIT_ms      = 8000;
@@ -415,14 +424,27 @@ inline constexpr QLength PF_DEBUG_CORRECTION_WARN = PF_DEBUG_CORRECTION_WARN_in 
 
 // Particle-filter robustness (anti-impoverishment / kidnapped-robot recovery)
 constexpr float PF_RESAMPLE_JITTER_SCALE      = 0.50f;  // jitter stddev = DRIVE_NOISE * scale
-constexpr float PF_RANDOM_INJECTION_BASE_FRACTION = 0.02f;   // residual exploration after resample
-constexpr float PF_RANDOM_INJECTION_MAX_FRACTION  = 0.20f;   // cap adaptive random-particle recovery
+constexpr float PF_RANDOM_INJECTION_BASE_FRACTION = 0.005f;  // residual exploration after resample
+constexpr float PF_RANDOM_INJECTION_MAX_FRACTION  = 0.08f;   // cap adaptive random-particle recovery
 constexpr float PF_RECOVERY_ALPHA_SLOW           = 0.001f;  // textbook w_slow update rate
 constexpr float PF_RECOVERY_ALPHA_FAST           = 0.10f;   // textbook w_fast update rate
 constexpr float PF_SENSOR_ONLY_EXPLORATION_NOISE_in = 0.0787402f;
+constexpr float PF_RESAMPLE_ESS_RATIO            = 0.40f;
+constexpr float PF_MEASUREMENT_CORRECTION_DEADBAND_in = 0.10f;
+constexpr float PF_MEASUREMENT_CORRECTION_MAX_STEP_in = 0.18f;
+constexpr float PF_MEASUREMENT_CORRECTION_MAX_STEP_ABS_in = 0.35f;
+constexpr float PF_MEASUREMENT_CORRECTION_BLEND_MIN = 0.08f;
+constexpr float PF_MEASUREMENT_CORRECTION_BLEND_MAX = 0.20f;
+constexpr float PF_MEASUREMENT_CORRECTION_ABS_BONUS = 0.08f;
 
 inline constexpr QLength PF_SENSOR_ONLY_EXPLORATION_NOISE =
     PF_SENSOR_ONLY_EXPLORATION_NOISE_in * inch;
+inline constexpr QLength PF_MEASUREMENT_CORRECTION_DEADBAND =
+    PF_MEASUREMENT_CORRECTION_DEADBAND_in * inch;
+inline constexpr QLength PF_MEASUREMENT_CORRECTION_MAX_STEP =
+    PF_MEASUREMENT_CORRECTION_MAX_STEP_in * inch;
+inline constexpr QLength PF_MEASUREMENT_CORRECTION_MAX_STEP_ABS =
+    PF_MEASUREMENT_CORRECTION_MAX_STEP_ABS_in * inch;
 
 // Odom-first localization fusion: drivetrain odom remains the controller base,
 // while GPS/MCL contribute bounded XY corrections on top of it.
@@ -430,26 +452,106 @@ constexpr float LOC_FUSION_STILLNESS_DEADBAND_in      = 0.20f;
 constexpr float LOC_GPS_RUNTIME_ERROR_MAX_in          = 8.0f;
 constexpr float LOC_GPS_CORRECTION_MAX_in             = 36.0f;
 constexpr float LOC_GPS_CORRECTION_STEP_in            = 0.25f;
+constexpr float LOC_GPS_CORRECTION_DEADBAND_in        = 0.12f;
 constexpr int   LOC_MCL_MIN_ACTIVE_SENSORS            = 3;
 constexpr float LOC_MCL_CORRECTION_MAX_in             = 18.0f;
-constexpr float LOC_MCL_CORRECTION_STEP_in            = 0.06f;
+constexpr float LOC_MCL_CORRECTION_STEP_in            = 0.04f;
+constexpr float LOC_MCL_CORRECTION_DEADBAND_in        = 0.10f;
 constexpr float LOC_MCL_CORRECTION_JUMP_REJECT_in     = 3.5f;
 constexpr float LOC_MCL_MIN_ESS_RATIO                 = 0.22f;
 
 // Distance-model obstacles for the Push Back field composition.
 // Coordinates are in canonical field-frame metres (origin at field centre).
+//
+// These are intentionally top-down approximations of the vertical surfaces that
+// a horizontal distance sensor can plausibly see, based on the official V5RC
+// Push Back Appendix A field drawings:
+// - "Field Reference Specifications - V5RC"
+// - "Object Placement (Top View) - V5RC"
+// - "Object Placement Reference - V5RC"
+//
+// The long goals are not modeled as solid 12 x 48 in blocks because their
+// middle spans are partially suspended. The center structure is also not a
+// single square block; it is approximated as a hub plus four diagonal arms,
+// along with the four small center goals around it.
 struct FieldObstacle {
-    float minX;
-    float maxX;
-    float minY;
-    float maxY;
+    float centerX;
+    float centerY;
+    float halfSizeX;
+    float halfSizeY;
+    float headingRad;
+    float minZ;
+    float maxZ;
 };
 
+constexpr float obstacleMeters(float inches) {
+    return inches * IN_TO_M;
+}
+
+constexpr float obstacleRadians(float degrees) {
+    return degrees * DEG_TO_RAD;
+}
+
+constexpr FieldObstacle makeAxisObstacle(float minXIn,
+                                         float maxXIn,
+                                         float minYIn,
+                                         float maxYIn,
+                                         float minZIn,
+                                         float maxZIn) {
+    return FieldObstacle{
+        obstacleMeters((minXIn + maxXIn) * 0.5f),
+        obstacleMeters((minYIn + maxYIn) * 0.5f),
+        obstacleMeters((maxXIn - minXIn) * 0.5f),
+        obstacleMeters((maxYIn - minYIn) * 0.5f),
+        0.0f,
+        obstacleMeters(minZIn),
+        obstacleMeters(maxZIn),
+    };
+}
+
+constexpr FieldObstacle makeRotatedObstacle(float centerXIn,
+                                            float centerYIn,
+                                            float sizeXIn,
+                                            float sizeYIn,
+                                            float headingDeg,
+                                            float minZIn,
+                                            float maxZIn) {
+    return FieldObstacle{
+        obstacleMeters(centerXIn),
+        obstacleMeters(centerYIn),
+        obstacleMeters(sizeXIn * 0.5f),
+        obstacleMeters(sizeYIn * 0.5f),
+        obstacleRadians(headingDeg),
+        obstacleMeters(minZIn),
+        obstacleMeters(maxZIn),
+    };
+}
+
+constexpr float MCL_DISTANCE_SENSOR_HEIGHT_in = 4.5f;
+inline constexpr QLength MCL_DISTANCE_SENSOR_HEIGHT =
+    MCL_DISTANCE_SENSOR_HEIGHT_in * inch;
+
 constexpr bool MCL_ENABLE_FIELD_OBSTACLES = true;
-inline constexpr std::array<FieldObstacle, 3> MCL_FIELD_OBSTACLES{{
-    {-0.3048f,  0.3048f, -0.3048f,  0.3048f},  // central field block (24 in square)
-    {-1.3716f, -1.0668f, -0.3048f,  0.3048f},  // west lane obstruction
-    { 1.0668f,  1.3716f, -0.3048f,  0.3048f},  // east lane obstruction
+inline constexpr std::array<FieldObstacle, 10> MCL_FIELD_OBSTACLES{{
+    // North long goal end supports centered at (x = +/-24, y = +48).
+    makeAxisObstacle(-25.9f, -22.1f, 46.4f, 49.6f, 0.0f, 10.0f),
+    makeAxisObstacle(22.1f, 25.9f, 46.4f, 49.6f, 0.0f, 10.0f),
+
+    // South long goal end supports centered at (x = +/-24, y = -48).
+    makeAxisObstacle(-25.9f, -22.1f, -49.6f, -46.4f, 0.0f, 10.0f),
+    makeAxisObstacle(22.1f, 25.9f, -49.6f, -46.4f, 0.0f, 10.0f),
+
+    // Center X-goal: two diagonal bars crossing at the field origin.
+    makeRotatedObstacle(0.0f, 0.0f, 16.0f, 2.2f, 45.0f, 0.0f, 7.0f),
+    makeRotatedObstacle(0.0f, 0.0f, 16.0f, 2.2f, -45.0f, 0.0f, 7.0f),
+
+    // One small loader square in each west-side quadrant at y = +/-48 in.
+    makeAxisObstacle(-70.2f, -67.6f, 46.7f, 49.3f, 0.0f, 10.0f),
+    makeAxisObstacle(-70.2f, -67.6f, -49.3f, -46.7f, 0.0f, 10.0f),
+
+    // One small loader square in each east-side quadrant at y = +/-48 in.
+    makeAxisObstacle(67.6f, 70.2f, 46.7f, 49.3f, 0.0f, 10.0f),
+    makeAxisObstacle(67.6f, 70.2f, -49.3f, -46.7f, 0.0f, 10.0f),
 }};
 
 inline constexpr QLength LOC_FUSION_STILLNESS_DEADBAND =
@@ -460,10 +562,14 @@ inline constexpr QLength LOC_GPS_CORRECTION_MAX =
     LOC_GPS_CORRECTION_MAX_in * inch;
 inline constexpr QLength LOC_GPS_CORRECTION_STEP =
     LOC_GPS_CORRECTION_STEP_in * inch;
+inline constexpr QLength LOC_GPS_CORRECTION_DEADBAND =
+    LOC_GPS_CORRECTION_DEADBAND_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_MAX =
     LOC_MCL_CORRECTION_MAX_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_STEP =
     LOC_MCL_CORRECTION_STEP_in * inch;
+inline constexpr QLength LOC_MCL_CORRECTION_DEADBAND =
+    LOC_MCL_CORRECTION_DEADBAND_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_JUMP_REJECT =
     LOC_MCL_CORRECTION_JUMP_REJECT_in * inch;
 

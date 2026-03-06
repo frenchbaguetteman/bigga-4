@@ -166,10 +166,20 @@ public:
             }
         }
 
-        m_prediction = usedMeasurements ? computeWeightedMean(heading) : priorPrediction;
+        if (usedMeasurements) {
+            const Eigen::Vector3f posteriorPrediction = computeWeightedMean(heading);
+            m_prediction = stabilizeMeasurementPrediction(
+                priorPrediction,
+                posteriorPrediction,
+                ess,
+                activeSensorCount,
+                activeAbsoluteSensorCount);
+        } else {
+            m_prediction = priorPrediction;
+        }
 
         if (usedMeasurements &&
-            ess < static_cast<double>(L) * 0.55) {
+            ess < static_cast<double>(L) * static_cast<double>(CONFIG::PF_RESAMPLE_ESS_RATIO)) {
             didResample = true;
             systematicResample(recoveryFraction);
         }
@@ -401,6 +411,74 @@ private:
         for (const auto& particle : m_particles) sum += particle;
         sum /= static_cast<float>(L);
         return Eigen::Vector3f(sum.x(), sum.y(), heading);
+    }
+
+    Eigen::Vector3f stabilizeMeasurementPrediction(const Eigen::Vector3f& priorPrediction,
+                                                   const Eigen::Vector3f& posteriorPrediction,
+                                                   double ess,
+                                                   size_t activeSensorCount,
+                                                   size_t activeAbsoluteSensorCount) const {
+        if (!LocMath::isFinitePose(priorPrediction) ||
+            !LocMath::isFinitePose(posteriorPrediction)) {
+            return priorPrediction;
+        }
+
+        Eigen::Vector2f correction =
+            posteriorPrediction.head<2>() - priorPrediction.head<2>();
+        if (!LocMath::isFiniteVec2(correction)) {
+            return priorPrediction;
+        }
+
+        const float correctionNorm = correction.norm();
+        if (correctionNorm <= CONFIG::PF_MEASUREMENT_CORRECTION_DEADBAND.convert(meter)) {
+            return priorPrediction;
+        }
+
+        const double essRatio = (L > 0)
+            ? (ess / static_cast<double>(L))
+            : 0.0;
+        const double normalizedEss = std::clamp(
+            (essRatio - static_cast<double>(CONFIG::PF_RESAMPLE_ESS_RATIO)) /
+                std::max(1e-6, 1.0 - static_cast<double>(CONFIG::PF_RESAMPLE_ESS_RATIO)),
+            0.0,
+            1.0);
+
+        float blend =
+            CONFIG::PF_MEASUREMENT_CORRECTION_BLEND_MIN +
+            static_cast<float>(normalizedEss) *
+                (CONFIG::PF_MEASUREMENT_CORRECTION_BLEND_MAX -
+                 CONFIG::PF_MEASUREMENT_CORRECTION_BLEND_MIN);
+        if (activeAbsoluteSensorCount > 0) {
+            blend = std::min(
+                1.0f,
+                blend + CONFIG::PF_MEASUREMENT_CORRECTION_ABS_BONUS);
+        } else if (activeSensorCount < 2) {
+            blend *= 0.5f;
+        }
+
+        correction *= std::clamp(blend, 0.0f, 1.0f);
+        const float maxStep =
+            activeAbsoluteSensorCount > 0
+                ? CONFIG::PF_MEASUREMENT_CORRECTION_MAX_STEP_ABS.convert(meter)
+                : CONFIG::PF_MEASUREMENT_CORRECTION_MAX_STEP.convert(meter);
+        correction = clampVectorMagnitude(correction, maxStep);
+
+        const Eigen::Vector2f stabilizedXY = priorPrediction.head<2>() + correction;
+        return Eigen::Vector3f(
+            stabilizedXY.x(),
+            stabilizedXY.y(),
+            posteriorPrediction.z());
+    }
+
+    static Eigen::Vector2f clampVectorMagnitude(const Eigen::Vector2f& v,
+                                                float maxMagnitude) {
+        if (!LocMath::isFiniteVec2(v) || maxMagnitude <= 0.0f) {
+            return Eigen::Vector2f(0.0f, 0.0f);
+        }
+
+        const float norm = v.norm();
+        if (norm <= maxMagnitude || norm <= 1e-6f) return v;
+        return v * (maxMagnitude / norm);
     }
 
     static double safeExp(double value) {
