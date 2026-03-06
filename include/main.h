@@ -50,7 +50,6 @@
 #include "localization/sensor.h"
 #include "localization/distance.h"
 #include "localization/gps.h"
-#include "localization/line.h"
 #include "localization/particleFilter.h"
 
 // Subsystems

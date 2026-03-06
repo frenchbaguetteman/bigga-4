@@ -423,12 +423,14 @@ inline constexpr QLength PF_STATIONARY_DEADBAND = PF_STATIONARY_DEADBAND_in * in
 inline constexpr QLength PF_DEBUG_CORRECTION_WARN = PF_DEBUG_CORRECTION_WARN_in * inch;
 
 // Particle-filter robustness (anti-impoverishment / kidnapped-robot recovery)
-constexpr float PF_RESAMPLE_JITTER_SCALE      = 0.50f;  // jitter stddev = DRIVE_NOISE * scale
-constexpr float PF_RANDOM_INJECTION_BASE_FRACTION = 0.005f;  // residual exploration after resample
-constexpr float PF_RANDOM_INJECTION_MAX_FRACTION  = 0.08f;   // cap adaptive random-particle recovery
+// Keep the particle cloud tighter so MCL stays focused on local verification,
+// while GPS continues to provide broader absolute positioning context.
+constexpr float PF_RESAMPLE_JITTER_SCALE      = 0.30f;  // jitter stddev = DRIVE_NOISE * scale
+constexpr float PF_RANDOM_INJECTION_BASE_FRACTION = 0.002f;  // residual exploration after resample
+constexpr float PF_RANDOM_INJECTION_MAX_FRACTION  = 0.04f;   // cap adaptive random-particle recovery
 constexpr float PF_RECOVERY_ALPHA_SLOW           = 0.001f;  // textbook w_slow update rate
 constexpr float PF_RECOVERY_ALPHA_FAST           = 0.10f;   // textbook w_fast update rate
-constexpr float PF_SENSOR_ONLY_EXPLORATION_NOISE_in = 0.0787402f;
+constexpr float PF_SENSOR_ONLY_EXPLORATION_NOISE_in = 0.0472441f;
 constexpr float PF_RESAMPLE_ESS_RATIO            = 0.40f;
 constexpr float PF_MEASUREMENT_CORRECTION_DEADBAND_in = 0.10f;
 constexpr float PF_MEASUREMENT_CORRECTION_MAX_STEP_in = 0.18f;
