@@ -30,8 +30,8 @@ HEADER_TEMPLATE = """\
 #define SELECTED_AUTON  {auton}
 #define DEFAULT_ALLIANCE {alliance}
 
-inline Auton   AUTON    = SELECTED_AUTON;
-inline Alliance ALLIANCE = DEFAULT_ALLIANCE;
+inline constexpr Auton DEFAULT_AUTON_SELECTION = SELECTED_AUTON;
+inline constexpr Alliance DEFAULT_ALLIANCE_SELECTION = DEFAULT_ALLIANCE;
 """
 
 

@@ -1,32 +1,16 @@
 /**
  * @file autonSelector.h
- * Brain-screen autonomous selector using LLEMU (3-button LCD).
- *
- * Layout:
- *   Line 0:  "69580A"
- *   Line 1:  "<< AUTON_NAME >>"
- *   Line 2:  "Alliance: RED / BLUE"
- *   Line 3:  (blank or status)
- *   Line 4:  "Pose: (x, y)"
- *   Line 5:  "Heading: θ°"
- *   Line 6:  (status)
- *   Line 7:  "[< Prev]  [Alliance]  [Next >]"
- *
- * Left  button → previous auton
- * Centre button → toggle alliance
- * Right button → next auton
+ * Brain-screen autonomous selector for the touch UI.
  */
 #pragma once
 
 #include "autonomous/autons.h"
 #include "Eigen/Dense"
-#include <vector>
 #include <string>
-#include <functional>
 
 class AutonSelector {
 public:
-    /// Initialise the selector and register LLEMU button callbacks.
+    /// Initialise selector state before the touch UI begins polling it.
     static void init();
 
     /// Cycle to the next / previous autonomous routine.
@@ -46,9 +30,9 @@ public:
     static std::string getAutonStr();
     static std::string getAllianceStr();
 
-    /// Refresh all 8 LCD lines.
+    /// Render the runtime screen model directly.
     /// @param pose  current robot pose (x, y, θ in radians)
-    /// @param status optional one-line status message for line 6
+    /// @param status optional one-line status message
     static void render(const Eigen::Vector3f& pose,
                        const std::string& status = "");
 
@@ -59,15 +43,6 @@ public:
                            const std::string& status = "");
 
 private:
-    static inline const std::vector<Auton> s_autonList = {
-        Auton::NEGATIVE_1,
-        Auton::NEGATIVE_2,
-        Auton::POSITIVE_1,
-        Auton::POSITIVE_2,
-        Auton::SKILLS,
-        Auton::NONE
-    };
-
     static inline int      s_index    = 0;
     static inline Alliance s_alliance = Alliance::RED;
 };

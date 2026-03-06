@@ -9,17 +9,36 @@
 
 // ── Static methods ──────────────────────────────────────────────────────────
 
+namespace {
+
+const std::vector<Auton>& autonList() {
+    return availableAutons();
+}
+
+} // namespace
+
 void AutonSelector::init() {
-    // No-op for LVGL UI. Kept for compatibility with existing call sites.
+    const auto& list = autonList();
+    if (list.empty()) {
+        s_index = 0;
+        return;
+    }
+    if (s_index < 0 || s_index >= static_cast<int>(list.size())) {
+        s_index = 0;
+    }
 }
 
 void AutonSelector::nextAuton() {
-    s_index = (s_index + 1) % static_cast<int>(s_autonList.size());
+    const auto& list = autonList();
+    if (list.empty()) return;
+    s_index = (s_index + 1) % static_cast<int>(list.size());
 }
 
 void AutonSelector::prevAuton() {
-    s_index = (s_index - 1 + static_cast<int>(s_autonList.size()))
-              % static_cast<int>(s_autonList.size());
+    const auto& list = autonList();
+    if (list.empty()) return;
+    s_index = (s_index - 1 + static_cast<int>(list.size()))
+              % static_cast<int>(list.size());
 }
 
 void AutonSelector::toggleAlliance() {
@@ -31,16 +50,24 @@ void AutonSelector::selectAlliance(Alliance alliance) {
 }
 
 void AutonSelector::selectAuton(Auton auton) {
-    for (size_t i = 0; i < s_autonList.size(); ++i) {
-        if (s_autonList[i] == auton) {
+    const auto& list = autonList();
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i] == auton) {
             s_index = static_cast<int>(i);
             return;
         }
     }
+
+    s_index = 0;
 }
 
 Auton AutonSelector::getAuton() {
-    return s_autonList[static_cast<size_t>(s_index)];
+    const auto& list = autonList();
+    if (list.empty()) return Auton::NONE;
+    if (s_index < 0 || s_index >= static_cast<int>(list.size())) {
+        s_index = 0;
+    }
+    return list[static_cast<size_t>(s_index)];
 }
 
 Alliance AutonSelector::getAlliance() {
@@ -48,19 +75,21 @@ Alliance AutonSelector::getAlliance() {
 }
 
 std::string AutonSelector::getAutonStr() {
-    return autonName(getAuton());
+    return std::string(autonName(getAuton()));
 }
 
 std::string AutonSelector::getAllianceStr() {
-    return (s_alliance == Alliance::RED) ? "RED" : "BLUE";
+    return std::string(allianceName(getAlliance()));
 }
 
 void AutonSelector::render(const Eigen::Vector3f& pose,
                            const std::string& status) {
     BrainScreen::RuntimeViewModel vm;
     vm.pose = pose;
-    vm.auton = getAutonStr();
-    vm.alliance = getAllianceStr();
+    vm.selectedAuton = getAuton();
+    vm.selectedAlliance = getAlliance();
+    vm.auton = std::string(autonName(vm.selectedAuton));
+    vm.alliance = std::string(allianceName(vm.selectedAlliance));
     vm.status = status;
     BrainScreen::renderRuntime(vm);
 }

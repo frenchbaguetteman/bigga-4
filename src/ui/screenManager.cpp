@@ -69,20 +69,28 @@ static const char* safeStatus(const std::string& s, int maxChars = 34) {
     return buf;
 }
 
-static uint32_t allianceAccent(const std::string& alliance) {
-    return (alliance == "RED") ? UITheme::kRed : UITheme::kBlue;
+static bool isRedAlliance(Alliance alliance) {
+    return alliance == Alliance::RED;
 }
 
-static uint32_t allianceFill(const std::string& alliance) {
-    return (alliance == "RED") ? UITheme::kRedDeep : UITheme::kBlueDeep;
+static uint32_t allianceAccent(Alliance alliance) {
+    return isRedAlliance(alliance) ? UITheme::kRed : UITheme::kBlue;
 }
 
-static const char* routineMode(const std::string& auton) {
-    return (auton == "Skills") ? "Skills Run" : "Match Routine";
+static uint32_t allianceFill(Alliance alliance) {
+    return isRedAlliance(alliance) ? UITheme::kRedDeep : UITheme::kBlueDeep;
 }
 
-static const char* routineBadge(const std::string& auton) {
-    return (auton == "Skills") ? "SKILLS" : "MATCH";
+static bool isSkillsAuton(Auton auton) {
+    return auton == Auton::SKILLS;
+}
+
+static const char* routineMode(Auton auton) {
+    return isSkillsAuton(auton) ? "Skills Run" : "Match Routine";
+}
+
+static const char* routineBadge(Auton auton) {
+    return isSkillsAuton(auton) ? "SKILLS" : "MATCH";
 }
 
 static const char* driftLabel(float driftIn) {
@@ -145,8 +153,8 @@ static void drawSelectPage(const BrainScreen::RuntimeViewModel& vm) {
     const UITheme::Rect nav = UITheme::makeRect(296, UITheme::kContentY + 8, 172, 100);
     const UITheme::Rect live = UITheme::makeRect(12, UITheme::kContentY + 118, 456, 85);
 
-    const uint32_t allianceCol = allianceAccent(vm.alliance);
-    const uint32_t allianceBg = allianceFill(vm.alliance);
+    const uint32_t allianceCol = allianceAccent(vm.selectedAlliance);
+    const uint32_t allianceBg = allianceFill(vm.selectedAlliance);
 
     UITheme::drawPanel(hero, UITheme::kPanelAlt, UITheme::kBorderStrong, allianceCol);
     UITheme::drawPanel(nav, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kAmber);
@@ -159,25 +167,25 @@ static void drawSelectPage(const BrainScreen::RuntimeViewModel& vm) {
 
     UITheme::drawChip(RED_BTN, "RED",
                       0x00401A1A,
-                      vm.alliance == "RED" ? UITheme::kRed : UITheme::kBorder,
+                      isRedAlliance(vm.selectedAlliance) ? UITheme::kRed : UITheme::kBorder,
                       UITheme::kText);
     UITheme::drawChip(BLUE_BTN, "BLUE",
                       0x0015223D,
-                      vm.alliance == "BLUE" ? UITheme::kBlue : UITheme::kBorder,
+                      isRedAlliance(vm.selectedAlliance) ? UITheme::kBorder : UITheme::kBlue,
                       UITheme::kText);
 
     UITheme::printTextf(pros::E_TEXT_LARGE, hero.x0 + 12, hero.y0 + 50,
                         UITheme::kText, "%s", vm.auton.c_str());
     UITheme::printTextf(pros::E_TEXT_SMALL, hero.x0 + 12, hero.y1 - 16,
-                        UITheme::kTextSoft, "%s", routineMode(vm.auton));
+                        UITheme::kTextSoft, "%s", routineMode(vm.selectedAuton));
 
     UITheme::printTextf(pros::E_TEXT_SMALL, nav.x0 + 12, nav.y0 + 10,
                         UITheme::kTextMuted, "AUTON NAV");
     UITheme::drawChip(PREV_BTN, "PREV", UITheme::kPanelMuted, UITheme::kBorderStrong, UITheme::kText);
     UITheme::drawChip(NEXT_BTN, "NEXT", UITheme::kPanelMuted, UITheme::kBorderStrong, UITheme::kText);
     UITheme::drawChip(SKILLS_BTN, "QUICK: SKILLS",
-                      vm.auton == "Skills" ? UITheme::kTealDeep : UITheme::kPanelMuted,
-                      vm.auton == "Skills" ? UITheme::kTeal : UITheme::kBorderStrong,
+                      isSkillsAuton(vm.selectedAuton) ? UITheme::kTealDeep : UITheme::kPanelMuted,
+                      isSkillsAuton(vm.selectedAuton) ? UITheme::kTeal : UITheme::kBorderStrong,
                       UITheme::kText);
     UITheme::printTextf(pros::E_TEXT_SMALL, nav.x0 + 12, nav.y1 - 16,
                         UITheme::kTextSoft, "Tap tabs for diagnostics");
@@ -252,7 +260,7 @@ static void drawPathPage(const BrainScreen::RuntimeViewModel& vm) {
     UITheme::printTextf(pros::E_TEXT_LARGE, route.x0 + 12, route.y0 + 42,
                         UITheme::kText, "%s", vm.auton.c_str());
     UITheme::drawChip(UITheme::makeRect(route.x1 - 96, route.y0 + 8, 84, 20),
-                      routineBadge(vm.auton), UITheme::kPanelMuted, UITheme::kAmber, UITheme::kText);
+                      routineBadge(vm.selectedAuton), UITheme::kPanelMuted, UITheme::kAmber, UITheme::kText);
     UITheme::printTextf(pros::E_TEXT_SMALL, route.x0 + 12, route.y1 - 16,
                         UITheme::kTextSoft, "Alliance %s", vm.alliance.c_str());
 

@@ -117,8 +117,8 @@ grep -n "isFinite\|absurd\|gpsErr\|m_lastError\|Skipped sensors" include/localiz
 - [x] `include/localization/distance.h` — optional disable flag
 
 **Key changes**:
-- [x] GPS constants: `GPS_STDDEV_BASE_M`, `GPS_ERROR_GOOD_M`, `GPS_ERROR_SCALE_MULTIPLIER`, etc.
-- [x] GPS `p()` method inflates stddev when error > `GPS_ERROR_GOOD_M`
+- [x] GPS constants: `GPS_STDDEV_BASE_in`, `GPS_ERROR_GOOD_in`, `GPS_ERROR_SCALE_MULTIPLIER`, etc.
+- [x] GPS `p()` method inflates stddev when error > `GPS_ERROR_GOOD_in`
 - [x] Distance sensors skip if `MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING`
 
 **Verification**:
@@ -166,16 +166,16 @@ Before your first test run, review these settings in `include/config.h`:
 
 2. **GPS Error Thresholds** (line ~230–240):
    ```cpp
-   constexpr float GPS_ERROR_THRESHOLD_M = 0.5f;   // reject if error > this
-   constexpr float GPS_ERROR_GOOD_M = 0.05f;       // full trust if error < this
+   constexpr float GPS_ERROR_THRESHOLD_in = 19.68504f;   // reject if error > this
+   constexpr float GPS_ERROR_GOOD_in = 1.968504f;       // full trust if error < this
    ```
    Tune based on observed GPS performance.
 
 3. **Distance Sensors** (line ~248):
    ```cpp
-   constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = true;  // set false when verified
+   constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;  // set true to isolate GPS + odom
    ```
-   Keep `true` until you've verified offset transforms match robot.
+   Set `true` only while isolating GPS + odometry for offset validation.
 
 4. **Debug Output** (line ~206):
    ```cpp
@@ -246,7 +246,7 @@ grep -n "error:" /tmp/pros_build.log
 **Fix**:
 1. Check GPS error: is `gps(Y)` showing high `err=` value?
 2. If `gps(N)`: GPS invalid, uses fallback. Try moving robot closer to GPS strip.
-3. If error is high: decrease `GPS_ERROR_GOOD_M` threshold or increase `GPS_ERROR_SCALE_MULTIPLIER`
+3. If error is high: decrease `GPS_ERROR_GOOD_in` or increase `GPS_ERROR_SCALE_MULTIPLIER`
 4. If problem persists: Check IMU calibration (should be done with robot stationary and level)
 
 ### Issue: Heading jumps during rotation
@@ -307,4 +307,3 @@ Fixes issues with:
 
 All regression tests pass. See docs/LOCALIZATION_* for details.
 ```
-

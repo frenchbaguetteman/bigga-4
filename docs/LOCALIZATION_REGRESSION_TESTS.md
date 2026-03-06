@@ -130,7 +130,9 @@ Run this test sequence three times, once for each mode:
 
 1. Set `STARTUP_POSE_MODE = ConfiguredStartPoseOnly`
    - Set `START_POSE_X_IN`, `START_POSE_Y_IN`, `START_POSE_THETA_DEG` to
-     match your known position (convert from m/rad to in/deg).
+     match your known position.
+   - Convert `x/y` from metres to inches, and convert `θ` from the internal
+     frame to VEX compass degrees (`0° = north`, clockwise positive).
    - Boot and note final PF pose from console.
 
 2. Set `STARTUP_POSE_MODE = GPSXYPlusIMUHeading`
@@ -191,10 +193,10 @@ the robot at approximately the same field position:
 
 ---
 
-## Test 6: Distance Sensor Confidence
+## Test 6: GPS + Distance Sensor Gating
 
-**Objective**: Verify distance sensors are currently disabled (until units/axes
-are verified).
+**Objective**: Verify GPS remains active and distance sensors can be toggled
+cleanly while you validate the wall-offset geometry.
 
 ### Setup
 
@@ -205,22 +207,24 @@ are verified).
 ### Execution
 
 1. Move robot and observe logs.
-2. Logs should show skipped sensors (if distance sensors are enabled):
-   ```
-   [PF] Skipped sensors (invalid readings): [0,1,2,3]
-   ```
+2. Confirm the startup log still reports the GPS sensor as active.
+3. Rebuild once more with `MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false`
+   and repeat.
 
 ### Acceptance Criteria
 
-- **With distance sensors disabled**: Logs should NOT show distance-sensor
-  skipping messages; only GPS (if enabled).
-- **With distance sensors enabled** (later phases): Logs should show occasional
-  skipped distance readings when confidence is low.
+- **With distance sensors disabled**: PF should still have GPS available as the
+  absolute-position sensor, and localization should remain usable.
+- **With distance sensors enabled**: `PFDBG` output should include distance
+  sensor lines. Invalid wall solutions should show `reading=INVALID` or
+  `exp=INVALID` rather than corrupting the pose estimate.
 
 ### Pass/Fail
 
-- **PASS**: Distance sensors properly skipped or accepted based on confidence
-- **FAIL**: Distance sensors used unconditionally or never used when they should be
+- **PASS**: GPS stays active in both runs, and distance sensors can be enabled
+  or disabled without destabilizing localization.
+- **FAIL**: GPS disappears unexpectedly, or distance sensor toggling causes
+  unstable pose jumps / invalid debug output
 
 ---
 
@@ -282,4 +286,3 @@ After all tests pass, document:
 - GPS strip location tested: _________________
 - Any anomalies observed: _________________
 - Recommended next steps: _________________
-

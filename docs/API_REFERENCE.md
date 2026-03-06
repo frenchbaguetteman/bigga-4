@@ -74,7 +74,7 @@ Compose multiple commands.
 class SequentialCommandGroup : public Command;   // Run one after another
 class ParallelCommandGroup   : public Command;   // Run all at once, end when ALL finish
 class ParallelRaceGroup      : public Command;   // Run all at once, end when ANY finishes
-class ParallelDeadlineGroup  : public Command;   // Run all, end when the deadline cmd finishes
+class DeadlineCommand        : public Command;   // End when inner cmd finishes or timeout expires
 ```
 
 ### `Trigger` (`trigger.h`)
@@ -248,10 +248,12 @@ VEX GPS 2-D Gaussian likelihood model.
 class GpsSensorModel : public SensorModel {
 public:
     GpsSensorModel(int port,
-                   double headingOffsetDeg = 0.0,
-                   float stddev = 0.05f);
+                   float headingOffsetDeg = 0.0f,
+                   float offsetX_m = 0.0f,
+                   float offsetY_m = 0.0f,
+                   float stddev = CONFIG::GPS_STDDEV_BASE.getValue());
 
-    double getHeadingOffsetDeg() const;
+    float getLastError() const;
 };
 ```
 
@@ -429,12 +431,12 @@ public:
 
 ### `AutonSelector` (`autonSelector.h`)
 
-Static-class brain-screen auton selector using LLEMU buttons.
+Static-class brain-screen auton selector used by the touch UI.
 
 ```cpp
 class AutonSelector {
 public:
-    static void init();                // Set up LCD & register button callbacks
+    static void init();                // Validate selector state
     static void nextAuton();           // Cycle forward
     static void prevAuton();           // Cycle backward
     static void toggleAlliance();      // RED ↔ BLUE

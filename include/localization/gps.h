@@ -18,7 +18,106 @@
 #include "Eigen/Core"
 #include "pros/gps.hpp"
 #include <cmath>
+#include <limits>
 #include <optional>
+
+namespace GpsLocalization {
+
+struct FieldReading {
+    Eigen::Vector2f sensorFieldPos{0.0f, 0.0f};
+    float robotHeadingRad = 0.0f;
+    float errorM = -1.0f;
+    bool hasHeading = false;
+};
+
+inline bool isPlausibleFieldPosition(const Eigen::Vector2f& position) {
+    return LocMath::isFiniteVec2(position) &&
+        std::fabs(position.x()) <= LocMath::GPS_ABSURD_LIMIT_M &&
+        std::fabs(position.y()) <= LocMath::GPS_ABSURD_LIMIT_M;
+}
+
+inline std::optional<FieldReading> readFieldReading(pros::Gps& gps,
+                                                    float headingOffsetDeg = 0.0f,
+                                                    bool requireHeading = true) {
+    auto pos = gps.get_position();
+    const Eigen::Vector2f rawGps(
+        static_cast<float>(pos.x),
+        static_cast<float>(pos.y));
+    const Eigen::Vector2f sensorFieldPos = CONFIG::transformGpsToFieldFrame(rawGps);
+    if (!isPlausibleFieldPosition(sensorFieldPos)) {
+        return std::nullopt;
+    }
+
+    const float gpsErrorM = static_cast<float>(gps.get_error());
+    if (!LocMath::isFinite(gpsErrorM) || gpsErrorM < 0.0f) {
+        return std::nullopt;
+    }
+
+    FieldReading reading;
+    reading.sensorFieldPos = sensorFieldPos;
+    reading.errorM = gpsErrorM;
+
+    if (!requireHeading) {
+        return reading;
+    }
+
+    const float rawHeadingDeg = static_cast<float>(gps.get_heading());
+    if (!LocMath::isFinite(rawHeadingDeg)) {
+        return std::nullopt;
+    }
+
+    const float robotHeading = CONFIG::gpsSensorHeadingDegToInternalRad(
+        rawHeadingDeg - headingOffsetDeg);
+    if (!LocMath::isFinite(robotHeading)) {
+        return std::nullopt;
+    }
+
+    reading.robotHeadingRad = robotHeading;
+    reading.hasHeading = true;
+    return reading;
+}
+
+inline std::optional<Eigen::Vector2f> robotCenterFromSensorPose(const Eigen::Vector2f& sensorFieldPos,
+                                                                float headingRad,
+                                                                const Eigen::Vector2f& offset) {
+    if (!LocMath::isFiniteVec2(sensorFieldPos) || !LocMath::isFinite(headingRad)) {
+        return std::nullopt;
+    }
+
+    const float cosT = std::cos(headingRad);
+    const float sinT = std::sin(headingRad);
+    const Eigen::Vector2f offsetWorld(
+        offset.x() * cosT - offset.y() * sinT,
+        offset.x() * sinT + offset.y() * cosT);
+    const Eigen::Vector2f robotCenter = sensorFieldPos - offsetWorld;
+    if (!LocMath::isFiniteVec2(robotCenter)) {
+        return std::nullopt;
+    }
+
+    return robotCenter;
+}
+
+inline std::optional<Eigen::Vector3f> robotPoseFromSensor(pros::Gps& gps,
+                                                          float headingOffsetDeg,
+                                                          const Eigen::Vector2f& offset,
+                                                          float maxErrorM = std::numeric_limits<float>::infinity()) {
+    const std::optional<FieldReading> reading = readFieldReading(gps, headingOffsetDeg, true);
+    if (!reading || reading->errorM > maxErrorM) {
+        return std::nullopt;
+    }
+
+    const std::optional<Eigen::Vector2f> robotCenter = robotCenterFromSensorPose(
+        reading->sensorFieldPos,
+        reading->robotHeadingRad,
+        offset);
+    if (!robotCenter) {
+        return std::nullopt;
+    }
+
+    return Eigen::Vector3f(robotCenter->x(), robotCenter->y(), reading->robotHeadingRad);
+}
+
+} // namespace GpsLocalization
 
 class GpsSensorModel : public SensorModel {
 public:
@@ -33,73 +132,36 @@ public:
                             float headingOffsetDeg = 0.0f,
                             float offsetX_m = 0.0f,
                             float offsetY_m = 0.0f,
-                            float stddev = 0.05f)
+                            float stddev = CONFIG::GPS_STDDEV_BASE.getValue())
         : m_gps(port)
         , m_headingOffsetDeg(headingOffsetDeg)
         , m_offset(offsetX_m, offsetY_m)
         , m_stddev(stddev) {}
 
     void update() override {
-        auto pos = m_gps.get_position();
-        float sx = static_cast<float>(pos.x);
-        float sy = static_cast<float>(pos.y);
-
-        // Reject non-finite readings
-        if (!LocMath::isFinite(sx) || !LocMath::isFinite(sy)) {
-            m_robotCenter = std::nullopt;
-            m_lastError = -1.0f;  // signal: invalid
-            return;
-        }
-
-        // Reject absurd magnitudes (outside plausible field area)
-        if (std::fabs(sx) > LocMath::GPS_ABSURD_LIMIT_M ||
-            std::fabs(sy) > LocMath::GPS_ABSURD_LIMIT_M) {
+        const std::optional<GpsLocalization::FieldReading> reading =
+            GpsLocalization::readFieldReading(m_gps, m_headingOffsetDeg, true);
+        if (!reading) {
             m_robotCenter = std::nullopt;
             m_lastError = -1.0f;
             return;
         }
-
-        // Gate GPS trust using RMS error from GPS sensor
-        // Query GPS error in metres; if error is too high, skip update
-        float gpsErrorM = static_cast<float>(m_gps.get_error());
-        if (!LocMath::isFinite(gpsErrorM) || gpsErrorM < 0.0f) {
-            m_robotCenter = std::nullopt;
-            m_lastError = -1.0f;
-            return;
-        }
-        m_lastError = gpsErrorM;
+        m_lastError = reading->errorM;
 
         // If GPS error exceeds threshold, skip this update (don't trust it)
-        if (gpsErrorM > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
+        if (m_lastError > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
             m_robotCenter = std::nullopt;
             return;
         }
 
-        // Transform raw GPS output into configured field frame.
-        Eigen::Vector2f gpsWorld = CONFIG::transformGpsToFieldFrame(Eigen::Vector2f(sx, sy));
-
-        // Read GPS heading, apply mounting offset, convert to internal frame
-        float rawHeadingDeg = static_cast<float>(m_gps.get_heading());
-        if (!LocMath::isFinite(rawHeadingDeg)) {
-            m_robotCenter = std::nullopt;
-            return;
-        }
-        // Convert from VEX compass (0° = north, CW+) to internal (0° = east/fwd, CCW+)
-        float robotHeading = CONFIG::gpsSensorHeadingDegToInternalRad(
-            rawHeadingDeg - m_headingOffsetDeg);
-
-        // Rotate mount offset into world frame
-        float cosT = std::cos(robotHeading);
-        float sinT = std::sin(robotHeading);
-        Eigen::Vector2f offsetWorld(
-            m_offset.x() * cosT - m_offset.y() * sinT,
-            m_offset.x() * sinT + m_offset.y() * cosT);
-
-        // Robot centre = sensor position − rotated mount offset
-        m_robotCenter = gpsWorld - offsetWorld;
+        m_robotCenter = GpsLocalization::robotCenterFromSensorPose(
+            reading->sensorFieldPos,
+            reading->robotHeadingRad,
+            m_offset);
     }
 
     bool hasObservation() const override { return m_robotCenter.has_value(); }
+    bool isAbsolutePositionSensor() const override { return true; }
 
     std::optional<float> p(const Eigen::Vector3f& particle) override {
         if (!m_robotCenter) return std::nullopt;

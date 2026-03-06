@@ -31,6 +31,9 @@ public:
     /** Whether this sensor has a usable observation after update(). */
     virtual bool hasObservation() const { return false; }
 
+    /** Whether this observation constrains absolute field position directly. */
+    virtual bool isAbsolutePositionSensor() const { return false; }
+
     /** Human-readable sensor name for debug logs. */
     virtual const char* debugName() const { return "sensor"; }
 

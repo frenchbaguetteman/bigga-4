@@ -101,6 +101,7 @@ pros upload --slot 2
 │   ├── autonomous/            ← auton routines, shared commands
 │   └── ...                    ← Eigen, units, utils, JSON, telemetry
 ├── src/
+│   ├── autonomous/            ← centralized auton definitions/builders
 │   ├── main.cpp               ← lifecycle, GPS init, scheduler tasks
 │   ├── subsystems/            ← subsystem implementations
 │   ├── motionProfiling/       ← Bézier motion profiling impl
@@ -153,6 +154,10 @@ Set the active mode with:
 ```cpp
 constexpr StartupPoseMode STARTUP_POSE_MODE = StartupPoseMode::GPSXYPlusIMUHeading;
 ```
+
+`START_POSE_THETA_DEG` uses VEX compass convention for human entry:
+`0° = north`, `90° = east`, clockwise positive. The localization stack converts
+that to the internal radians frame automatically.
 
 ### Distance Sensor Weights
 

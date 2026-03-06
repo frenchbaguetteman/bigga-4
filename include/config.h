@@ -43,6 +43,9 @@ namespace CONFIG {
 constexpr float IN_TO_M   = 0.0254f;
 constexpr float INCH_TO_M = IN_TO_M;  // backward-compatible alias
 constexpr float CM_TO_IN  = 1.0f / 2.54f;
+constexpr float PI_F      = 3.14159265358979323846f;
+constexpr float DEG_TO_RAD = PI_F / 180.0f;
+constexpr float RAD_TO_DEG = 180.0f / PI_F;
 
 constexpr QLength length_from_in(float inches) {
     return inches * inch;
@@ -54,6 +57,10 @@ constexpr QTime time_from_ms(float milliseconds) {
 
 constexpr QAngle angle_from_deg(float degrees) {
     return degrees * degree;
+}
+
+constexpr QAngle angle_from_rad(float radians) {
+    return radians * radian;
 }
 
 constexpr QVelocity velocity_from_inps(float inchesPerSecond) {
@@ -68,6 +75,26 @@ inline float wrapAngleRadians(float angleRad) {
     return std::atan2(std::sin(angleRad), std::cos(angleRad));
 }
 
+constexpr float wrapDegreesSigned(float degrees) {
+    while (degrees <= -180.0f) degrees += 360.0f;
+    while (degrees > 180.0f) degrees -= 360.0f;
+    return degrees;
+}
+
+constexpr float wrapDegreesPositive(float degrees) {
+    while (degrees < 0.0f) degrees += 360.0f;
+    while (degrees >= 360.0f) degrees -= 360.0f;
+    return degrees;
+}
+
+constexpr float absf(float value) {
+    return value < 0.0f ? -value : value;
+}
+
+constexpr bool approxEq(float a, float b, float eps = 1e-4f) {
+    return absf(a - b) <= eps;
+}
+
 /**
  * Convert VEX GPS compass heading (0° = north, CW positive) to internal heading
  * (0° = east/forward, CCW positive).
@@ -75,12 +102,8 @@ inline float wrapAngleRadians(float angleRad) {
  * @param compassDeg  VEX compass heading in degrees [0, 360)
  * @return internal heading in radians
  */
-inline float gpsHeadingDegToInternalRad(float compassDeg) {
-    // GPS: 0° = north (+Y), 90° = east (+X), etc., CW positive
-    // Internal: 0° = east (+X), 90° = north (+Y), CCW positive
-    // Transform: θ_internal = π/2 - θ_gps_rad
-    float gpsRad = compassDeg * static_cast<float>(M_PI) / 180.0f;
-    return wrapAngleRadians(static_cast<float>(M_PI / 2.0) - gpsRad);
+constexpr float gpsHeadingDegToInternalRad(float compassDeg) {
+    return wrapDegreesSigned(90.0f - compassDeg) * DEG_TO_RAD;
 }
 
 /**
@@ -90,14 +113,9 @@ inline float gpsHeadingDegToInternalRad(float compassDeg) {
  * @param internalRad  internal heading in radians
  * @return GPS compass heading in degrees [0, 360)
  */
-inline float internalRadToGpsHeadingDeg(float internalRad) {
-    // Inverse: θ_gps_rad = π/2 - θ_internal
-    float wrapped = wrapAngleRadians(internalRad);
-    float gpsRad = static_cast<float>(M_PI / 2.0) - wrapped;
-    float deg = gpsRad * 180.0f / static_cast<float>(M_PI);
-    while (deg < 0.0f) deg += 360.0f;
-    while (deg >= 360.0f) deg -= 360.0f;
-    return deg;
+constexpr float internalRadToGpsHeadingDeg(float internalRad) {
+    const float internalDeg = wrapDegreesSigned(internalRad * RAD_TO_DEG);
+    return wrapDegreesPositive(90.0f - internalDeg);
 }
 
 // Legacy aliases for backward compatibility
@@ -108,6 +126,14 @@ inline float compassDegToMathRad(float headingDeg) {
 inline float mathRadToCompassDeg(float headingRad) {
     return internalRadToGpsHeadingDeg(headingRad);
 }
+
+static_assert(approxEq(gpsHeadingDegToInternalRad(0.0f), 90.0f * DEG_TO_RAD));
+static_assert(approxEq(gpsHeadingDegToInternalRad(90.0f), 0.0f));
+static_assert(approxEq(gpsHeadingDegToInternalRad(180.0f), -90.0f * DEG_TO_RAD));
+static_assert(approxEq(gpsHeadingDegToInternalRad(270.0f), 180.0f * DEG_TO_RAD));
+static_assert(approxEq(internalRadToGpsHeadingDeg(0.0f), 90.0f));
+static_assert(approxEq(internalRadToGpsHeadingDeg(90.0f * DEG_TO_RAD), 0.0f));
+static_assert(approxEq(internalRadToGpsHeadingDeg(-90.0f * DEG_TO_RAD), 180.0f));
 
 // ── Startup Pose Mode ───────────────────────────────────────────────────────
 
@@ -162,8 +188,8 @@ inline constexpr QLength LATERAL_WHEEL_OFFSET = length_from_in(LATERAL_WHEEL_OFF
 
 // ── MCL Distance Sensor Ports ───────────────────────────────────────────────
 
-constexpr int MCL_LEFT_DISTANCE_PORT   = 2;    // facing -90° (left)
-constexpr int MCL_RIGHT_DISTANCE_PORT  = 5;    // facing +90° (right)
+constexpr int MCL_LEFT_DISTANCE_PORT   = 2;    // facing +90° (left)
+constexpr int MCL_RIGHT_DISTANCE_PORT  = 5;    // facing -90° (right)
 constexpr int MCL_BACK_DISTANCE_PORT   = 4;    // facing 180° (back)
 constexpr int MCL_FRONT_DISTANCE_PORT  = 1;   // facing 0°   (front)
 constexpr int MCL_GPS_PORT             = 3;
@@ -293,6 +319,7 @@ constexpr bool MCL_ENABLE_LEFT_DISTANCE_SENSOR     = true;
 constexpr bool MCL_ENABLE_RIGHT_DISTANCE_SENSOR    = true;
 constexpr bool MCL_ENABLE_BACK_DISTANCE_SENSOR     = true;
 constexpr bool MCL_ENABLE_FRONT_DISTANCE_SENSOR    = true;
+constexpr bool MCL_ENABLE_GPS_SENSOR               = true;
 
 constexpr double MCL_LEFT_DISTANCE_WEIGHT   = 0.60;
 constexpr double MCL_RIGHT_DISTANCE_WEIGHT  = 0.60;
@@ -323,7 +350,7 @@ constexpr double MCL_DRIVE_ENCODER_FALLBACK_NOISE_SCALE = 1.75;
 // When GPS error is poor, reduce GPS influence.
 //
 // GPS stddev = base + (error - errorGood) * errorScale, clamped to [min, max]
-// If GPS error > GPS_ERROR_THRESHOLD_M, skip update entirely (Phase 5).
+// If GPS error > GPS_ERROR_THRESHOLD, skip update entirely (Phase 5).
 // If GPS error in [errorGood, errorThreshold], inflate stddev adaptively.
 
 constexpr float GPS_STDDEV_BASE_in          = 1.968504f;
@@ -344,7 +371,8 @@ constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;
 
 // ── Starting Pose (field frame, inches / degrees) ───────────────────────────
 // Set these to where the robot is physically placed at boot.
-// theta: 0° = +Y (north), CW positive.
+// X/Y use the canonical field axes (+X east/forward, +Y north/left).
+// theta stays human-friendly in VEX compass convention: 0° = north, CW positive.
 
 constexpr float START_POSE_X_in       = 0.0f;
 constexpr float START_POSE_Y_in       = 0.0f;
@@ -352,7 +380,8 @@ constexpr float START_POSE_THETA_deg  = 0.0f;
 
 inline constexpr QLength START_POSE_X = length_from_in(START_POSE_X_in);
 inline constexpr QLength START_POSE_Y = length_from_in(START_POSE_Y_in);
-inline constexpr QAngle START_POSE_THETA = angle_from_deg(START_POSE_THETA_deg);
+inline constexpr QAngle START_POSE_THETA =
+    angle_from_rad(gpsHeadingDegToInternalRad(START_POSE_THETA_deg));
 
 constexpr bool START_POSE_KNOWN = false;
 

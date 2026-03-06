@@ -114,7 +114,7 @@ Eliminates ambiguity about offset coordinate systems and units, ensuring sensor 
 
 1. **Reject non-finite readings**: Check `std::isfinite()`
 2. **Reject failed readings**: Absurd magnitudes > GPS_ABSURD_LIMIT_M
-3. **Gate on GPS error**: `gps_get_error()` > GPS_ERROR_THRESHOLD_M → skip update
+3. **Gate on GPS error**: `gps_get_error()` > `GPS_ERROR_THRESHOLD` → skip update
 4. **Track error**: Store `m_lastError` for adaptive weighting (Phase 6)
 5. **Added accessor**: `getLastError()`
 
@@ -145,11 +145,11 @@ Prevents garbage sensor readings from corrupting particle filter. Graceful degra
 **File: `include/config.h`**
 
 1. **Added GPS error-adaptive weighting constants**:
-   - `GPS_STDDEV_BASE_M` — baseline measurement noise
-   - `GPS_ERROR_GOOD_M` — threshold for full trust
+   - `GPS_STDDEV_BASE` — baseline measurement noise
+   - `GPS_ERROR_GOOD` — threshold for full trust
    - `GPS_ERROR_SCALE_MULTIPLIER` — how much to inflate stddev per excess error
-   - `GPS_STDDEV_MIN_M` / `GPS_STDDEV_MAX_M` — clamping bounds
-   - `GPS_ERROR_THRESHOLD_M` — hard reject threshold
+   - `GPS_STDDEV_MIN` / `GPS_STDDEV_MAX` — clamping bounds
+   - `GPS_ERROR_THRESHOLD` — hard reject threshold
 
 2. **Added debug flag**: `MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING`
 
@@ -157,7 +157,7 @@ Prevents garbage sensor readings from corrupting particle filter. Graceful degra
 
 1. **Adaptive stddev calculation** in `p()`:
    ```cpp
-   if (lastError > GPS_ERROR_GOOD_M) {
+   if (lastError > GPS_ERROR_GOOD) {
        inflate stddev based on excess error
    }
    ```
@@ -293,22 +293,21 @@ Each test has:
 ## Questions / Clarifications
 
 **Q: Why are distance sensors disabled?**
-A: Phase 4 revealed potential unit/axis bugs. They're disabled by default
-(`MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false` to enable). Once you
-verify the offset transforms match robot geometry, set to `true` and rebuild.
+A: They are not disabled by default. `MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING`
+defaults to `false`, which keeps them active. Set it to `true` only when you
+want to isolate GPS + odometry while validating the wall-offset geometry.
 
 **Q: What if GPS error is always reported as 0?**
 A: Some GPS modules don't report error correctly. In that case:
-1. Set `GPS_ERROR_THRESHOLD_M` very high (e.g., 999.0f) to always accept GPS
+1. Set `GPS_ERROR_THRESHOLD_in` very high (for example `999.0f`) to always accept GPS
 2. Or use `GPSXYPlusIMUHeading` mode to reduce GPS heading reliance
 
 **Q: Should I enable/disable distance sensors?**
-A: For now, disable them (`MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = true`).
-Once you've verified offset transforms in config.h match your actual robot
-geometry, set to `false` to include them.
+A: Leave them enabled once the offset transforms in `config.h` match the actual
+robot geometry. Temporarily set `MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = true`
+only when you need a GPS + odometry isolation run.
 
 **Q: How do I know if my offsets are correct?**
-A: Run Test 3 (Drive Straight Forward) with distance sensors disabled. Robot
+A: Run Test 3 (Drive Straight Forward). Robot
 should move cleanly along +X (forward). If x-direction doesn't increase or y
 drifts badly, odometry offsets may be wrong. Recheck wheel geometry constants.
-

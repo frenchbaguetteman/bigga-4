@@ -1,10 +1,10 @@
 /**
  * @file autons.h
- * Autonomous routine enumeration and selector.
+ * Autonomous routine identifiers and shared selector metadata.
  */
 #pragma once
 
-#include <string>
+#include <vector>
 
 enum class Auton {
     NEGATIVE_1,
@@ -20,15 +20,11 @@ enum class Alliance {
     BLUE
 };
 
-/** Convert Auton enum to a human-readable name. */
-inline std::string autonName(Auton a) {
-    switch (a) {
-        case Auton::NEGATIVE_1: return "Negative 1";
-        case Auton::NEGATIVE_2: return "Negative 2";
-        case Auton::POSITIVE_1: return "Positive 1";
-        case Auton::POSITIVE_2: return "Positive 2";
-        case Auton::SKILLS:     return "Skills";
-        case Auton::NONE:       return "None";
-    }
-    return "Unknown";
-}
+/** Ordered list used by the UI and build plumbing. */
+const std::vector<Auton>& availableAutons();
+
+/** Convert an Auton enum to a human-readable name. */
+const char* autonName(Auton auton);
+
+/** Convert an Alliance enum to a human-readable name. */
+const char* allianceName(Alliance alliance);

@@ -33,7 +33,7 @@ static ParticleFilter* particleFilter = nullptr;
 // Autonomous command — built on-demand, scheduled in autonomous()
 // ═══════════════════════════════════════════════════════════════════════════
 
-static Command* autonCommand = nullptr;
+static std::unique_ptr<Command> autonCommand;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Pose source (shared lambda used by all path-followers)
@@ -78,32 +78,38 @@ static Eigen::Vector2f moveTowardsVec2(const Eigen::Vector2f& current,
     return current + delta * (maxStep / dist);
 }
 
-static std::optional<GpsPoseSample> sampleGpsPose() {
-    if (!uiGps) return std::nullopt;
+static std::optional<GpsPoseSample> poseSampleFromReading(
+    const GpsLocalization::FieldReading& reading) {
+    if (!reading.hasHeading) return std::nullopt;
 
-    auto pos = uiGps->get_position();
-    const float errorM = static_cast<float>(uiGps->get_error());
-    Eigen::Vector2f rawGps(
-        static_cast<float>(pos.x),
-        static_cast<float>(pos.y));
-    Eigen::Vector2f gpsField = CONFIG::transformGpsToFieldFrame(rawGps);
-    const float heading = CONFIG::gpsSensorHeadingDegToInternalRad(static_cast<float>(
-        uiGps->get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_deg));
-
-    if (!std::isfinite(gpsField.x()) || !std::isfinite(gpsField.y()) ||
-        !std::isfinite(heading) || !std::isfinite(errorM) || errorM < 0.0f) {
+    const std::optional<Eigen::Vector2f> robotCenter =
+        GpsLocalization::robotCenterFromSensorPose(
+            reading.sensorFieldPos,
+            reading.robotHeadingRad,
+            CONFIG::GPS_OFFSET);
+    if (!robotCenter) {
         return std::nullopt;
     }
 
-    const float cosT = std::cos(heading);
-    const float sinT = std::sin(heading);
-    const float ox = CONFIG::GPS_OFFSET.x() * cosT - CONFIG::GPS_OFFSET.y() * sinT;
-    const float oy = CONFIG::GPS_OFFSET.x() * sinT + CONFIG::GPS_OFFSET.y() * cosT;
-
     GpsPoseSample sample;
-    sample.pose = Eigen::Vector3f(gpsField.x() - ox, gpsField.y() - oy, heading);
-    sample.errorM = errorM;
+    sample.pose = Eigen::Vector3f(robotCenter->x(), robotCenter->y(), reading.robotHeadingRad);
+    sample.errorM = reading.errorM;
     return sample;
+}
+
+static std::optional<GpsPoseSample> sampleGpsPose() {
+    if (!uiGps) return std::nullopt;
+
+    const std::optional<GpsLocalization::FieldReading> reading =
+        GpsLocalization::readFieldReading(
+            *uiGps,
+            CONFIG::MCL_GPS_HEADING_OFFSET_deg,
+            true);
+    if (!reading || reading->errorM > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
+        return std::nullopt;
+    }
+
+    return poseSampleFromReading(*reading);
 }
 
 static Eigen::Vector3f computeCombinedPose() {
@@ -141,8 +147,9 @@ static Eigen::Vector3f computeCombinedPose() {
 
         if (LocMath::isFinitePose(pf) &&
             particleFilter->lastUpdateUsedMeasurements() &&
-            particleFilter->getLastActiveSensorCount() >=
-                static_cast<size_t>(CONFIG::LOC_MCL_MIN_ACTIVE_SENSORS) &&
+            (particleFilter->getLastActiveAbsoluteSensorCount() > 0 ||
+             particleFilter->getLastActiveSensorCount() >=
+                static_cast<size_t>(CONFIG::LOC_MCL_MIN_ACTIVE_SENSORS)) &&
             correctionJump <= CONFIG::LOC_MCL_CORRECTION_JUMP_REJECT.getValue()) {
             targetCorrection = pfCorrection;
             maxCorrection = CONFIG::LOC_MCL_CORRECTION_MAX.getValue();
@@ -254,8 +261,10 @@ void screen_update_loop() {
     while (true) {
         BrainScreen::RuntimeViewModel vm;
 
-        vm.auton = AutonSelector::getAutonStr();
-        vm.alliance = AutonSelector::getAllianceStr();
+        vm.selectedAuton = AutonSelector::getAuton();
+        vm.selectedAlliance = AutonSelector::getAlliance();
+        vm.auton = std::string(autonName(vm.selectedAuton));
+        vm.alliance = std::string(allianceName(vm.selectedAlliance));
         vm.status = screenStatus;
 
         vm.pureOdomPose = drivetrain ? drivetrain->getOdomPose()
@@ -324,7 +333,7 @@ static void subsystemInit() {
  * Falls back to config if it doesn't lock.
  */
 static Eigen::Vector3f acquireInitialPose() {
-    // Fallback pose from config (inches → metres, compass-deg → math-rad)
+    // Fallback pose from config (inches → metres, compass-deg → internal-rad)
     Eigen::Vector3f configPose(
         CONFIG::START_POSE_X.getValue(),
         CONFIG::START_POSE_Y.getValue(),
@@ -346,33 +355,29 @@ static Eigen::Vector3f acquireInitialPose() {
     pros::Gps gps(CONFIG::MCL_GPS_PORT);
     pros::delay(100);
 
-    float lastX = 0, lastY = 0;
+    Eigen::Vector2f lastFieldPos(0.0f, 0.0f);
     bool hasLast = false;
     int stableCount = 0;
+    std::optional<GpsLocalization::FieldReading> lastReading;
     constexpr int pollDelayMs = 50;
     const int maxPolls = static_cast<int>(
         (CONFIG::STARTUP_GPS_MAX_WAIT_ms + pollDelayMs - 1) / pollDelayMs);
+    const bool requireGpsHeadingDuringPoll =
+        CONFIG::STARTUP_POSE_MODE == CONFIG::StartupPoseMode::FullGPSInit;
 
     for (int i = 0; i < maxPolls; ++i) {
-        auto pos = gps.get_position();
-        Eigen::Vector2f rawGps(
-            static_cast<float>(pos.x),
-            static_cast<float>(pos.y));
-        Eigen::Vector2f gpsField = CONFIG::transformGpsToFieldFrame(rawGps);
-        float x = gpsField.x();
-        float y = gpsField.y();
-
-        if (!std::isfinite(x) || !std::isfinite(y)) {
+        const std::optional<GpsLocalization::FieldReading> reading =
+            GpsLocalization::readFieldReading(
+                gps,
+                CONFIG::MCL_GPS_HEADING_OFFSET_deg,
+                requireGpsHeadingDuringPoll);
+        if (!reading || reading->errorM > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
             pros::delay(pollDelayMs);
             continue;
         }
 
-        // Reject absurd magnitudes (outside plausible field area)
-        if (std::fabs(x) > LocMath::GPS_ABSURD_LIMIT_M ||
-            std::fabs(y) > LocMath::GPS_ABSURD_LIMIT_M) {
-            pros::delay(pollDelayMs);
-            continue;
-        }
+        const float x = reading->sensorFieldPos.x();
+        const float y = reading->sensorFieldPos.y();
 
         // Skip initial zeros (GPS hasn't booted yet)
         if (!hasLast && std::abs(x) < 0.001f && std::abs(y) < 0.001f) {
@@ -381,17 +386,16 @@ static Eigen::Vector3f acquireInitialPose() {
         }
 
         if (hasLast) {
-            float dx = x - lastX, dy = y - lastY;
-            float drift = std::sqrt(dx * dx + dy * dy);
+            const float drift = (reading->sensorFieldPos - lastFieldPos).norm();
             if (drift < CONFIG::STARTUP_GPS_READY_ERROR.getValue()) {
                 ++stableCount;
             } else {
                 stableCount = 0;
             }
         }
-        lastX = x;
-        lastY = y;
+        lastFieldPos = reading->sensorFieldPos;
         hasLast = true;
+        lastReading = reading;
 
         // Update loading screen inline
         float progress = 0.3f + 0.5f * (static_cast<float>(i) / maxPolls);
@@ -406,30 +410,18 @@ static Eigen::Vector3f acquireInitialPose() {
         pros::delay(pollDelayMs);
     }
 
-    if (!hasLast || stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
+    if (!lastReading || !hasLast || stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
         renderInitStage(0.85f, "Init localization", "GPS timeout - config");
         pros::delay(200);
         std::printf("[INIT] GPS timeout, using config pose\n");
         return configPose;
     }
 
-    float gpsHeadingRad = CONFIG::gpsSensorHeadingDegToInternalRad(static_cast<float>(
-        gps.get_heading() - CONFIG::MCL_GPS_HEADING_OFFSET_deg));
-    float imuHeadingRad = drivetrain->getHeading();
-
-    // Reject non-finite headings — fall back to config
-    if (!LocMath::isFinite(gpsHeadingRad) || !LocMath::isFinite(imuHeadingRad)) {
-        std::printf("[INIT] heading non-finite (gps=%.2f imu=%.2f), using config\n",
-                    gpsHeadingRad, imuHeadingRad);
-        return configPose;
-    }
-
-    auto centerFromGps = [&](float headingRad) {
-        const float cosT = std::cos(headingRad);
-        const float sinT = std::sin(headingRad);
-        const float ox = CONFIG::GPS_OFFSET.x() * cosT - CONFIG::GPS_OFFSET.y() * sinT;
-        const float oy = CONFIG::GPS_OFFSET.x() * sinT + CONFIG::GPS_OFFSET.y() * cosT;
-        return Eigen::Vector2f(lastX - ox, lastY - oy);
+    auto centerFromGps = [&](float headingRad) -> std::optional<Eigen::Vector2f> {
+        return GpsLocalization::robotCenterFromSensorPose(
+            lastReading->sensorFieldPos,
+            headingRad,
+            CONFIG::GPS_OFFSET);
     };
 
     // Validate final pose is finite before returning
@@ -445,12 +437,29 @@ static Eigen::Vector3f acquireInitialPose() {
 
     switch (CONFIG::STARTUP_POSE_MODE) {
         case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading: {
-            Eigen::Vector2f c = centerFromGps(imuHeadingRad);
-            return safeReturn(Eigen::Vector3f(c.x(), c.y(), imuHeadingRad));
+            const float imuHeadingRad = drivetrain ? drivetrain->getHeading() : configPose.z();
+            if (!LocMath::isFinite(imuHeadingRad)) {
+                std::printf("[INIT] IMU heading non-finite, using config\n");
+                return configPose;
+            }
+            const std::optional<Eigen::Vector2f> c = centerFromGps(imuHeadingRad);
+            if (!c) {
+                std::printf("[INIT] GPS centre solve failed (imu heading), using config\n");
+                return configPose;
+            }
+            return safeReturn(Eigen::Vector3f(c->x(), c->y(), imuHeadingRad));
         }
         case CONFIG::StartupPoseMode::FullGPSInit: {
-            Eigen::Vector2f c = centerFromGps(gpsHeadingRad);
-            return safeReturn(Eigen::Vector3f(c.x(), c.y(), gpsHeadingRad));
+            if (!lastReading->hasHeading || !LocMath::isFinite(lastReading->robotHeadingRad)) {
+                std::printf("[INIT] GPS heading non-finite, using config\n");
+                return configPose;
+            }
+            const std::optional<Eigen::Vector2f> c = centerFromGps(lastReading->robotHeadingRad);
+            if (!c) {
+                std::printf("[INIT] GPS centre solve failed (gps heading), using config\n");
+                return configPose;
+            }
+            return safeReturn(Eigen::Vector3f(c->x(), c->y(), lastReading->robotHeadingRad));
         }
         default:
             return configPose;
@@ -463,6 +472,12 @@ static Eigen::Vector3f acquireInitialPose() {
 
 static void localizationInit() {
     std::vector<SensorModel*> sensors;
+    static GpsSensorModel gpsSensor(
+        CONFIG::MCL_GPS_PORT,
+        CONFIG::MCL_GPS_HEADING_OFFSET_deg,
+        CONFIG::GPS_OFFSET.x(),
+        CONFIG::GPS_OFFSET.y(),
+        CONFIG::GPS_STDDEV_BASE.getValue());
 
     static DistanceSensorModel distLeft(
         CONFIG::MCL_LEFT_DISTANCE_PORT,  CONFIG::DIST_LEFT_OFFSET,
@@ -480,6 +495,10 @@ static void localizationInit() {
         CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::DIST_BACK_OFFSET,
         static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT),
         CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distBack");
+
+    if (CONFIG::MCL_ENABLE_GPS_SENSOR) {
+        sensors.push_back(&gpsSensor);
+    }
 
     if (CONFIG::MCL_ENABLE_DISTANCE_SENSORS) {
         if (CONFIG::MCL_ENABLE_LEFT_DISTANCE_SENSOR)  sensors.push_back(&distLeft);
@@ -527,10 +546,12 @@ static void localizationInit() {
     }
     std::printf("[LOC_CONFIG] Start Pose: (%.3f, %.3f, %.3f rad)\n",
         startPose.x(), startPose.y(), startPose.z());
-    std::printf("[LOC_CONFIG] GPS Error Threshold (UI/startup only): %.3f in\n", CONFIG::GPS_ERROR_THRESHOLD_in);
+    std::printf("[LOC_CONFIG] GPS Hard Reject Threshold: %.3f in\n", CONFIG::GPS_ERROR_THRESHOLD_in);
+    std::printf("[LOC_CONFIG] GPS Sensor Enabled: %s\n",
+        CONFIG::MCL_ENABLE_GPS_SENSOR ? "YES" : "NO");
     std::printf("[LOC_CONFIG] Distance Sensors Disabled: %s\n",
         CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING ? "YES" : "NO");
-    std::printf("[LOC_CONFIG] Active MCL Sensors (distance-only): %zu\n", sensors.size());
+    std::printf("[LOC_CONFIG] Active MCL Sensors (gps+distance): %zu\n", sensors.size());
     std::printf("[LOC_CONFIG] ═════════════════════════════════════════════════\n\n");
 
     particleFilter = new ParticleFilter(
@@ -551,19 +572,20 @@ static void localizationInit() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void buildAutonCommand() {
-    if (autonCommand) {
-        if (autonCommand->isScheduled()) {
-            autonCommand->cancel();
-        }
-        delete autonCommand;
-        autonCommand = nullptr;
+    if (autonCommand && autonCommand->isScheduled()) {
+        autonCommand->cancel();
     }
 
-    AUTON    = AutonSelector::getAuton();
-    ALLIANCE = AutonSelector::getAlliance();
+    AutonBuildContext context;
+    context.drivetrain = drivetrain;
+    context.intakes = intakes;
+    context.lift = lift;
+    context.solenoids = solenoids;
+    context.poseSource = poseSource;
 
     autonCommand = autonCommands::makeAutonCommand(
-        AUTON, drivetrain, intakes, lift, solenoids, poseSource);
+        AutonSelector::getAuton(),
+        context);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -579,6 +601,8 @@ void initialize() {
     // 1. LCD on — show first frame
     BrainScreen::initialize();
     renderInitStage(0.0f, "Boot", "Booting...");
+    AutonSelector::selectAuton(DEFAULT_AUTON_SELECTION);
+    AutonSelector::selectAlliance(DEFAULT_ALLIANCE_SELECTION);
 
     // 2. Subsystems
     renderInitStage(0.10f, "Init subsystems", "Creating subsystem objects");
@@ -619,7 +643,7 @@ void competition_initialize() {
 void autonomous() {
     buildAutonCommand();
     if (autonCommand) {
-        CommandScheduler::schedule(autonCommand);
+        CommandScheduler::schedule(autonCommand.get());
     }
 }
 
@@ -661,12 +685,13 @@ void opcontrol() {
     bTrigger.onTrue(shared::toggleSelect2(solenoids));
     CommandScheduler::addTrigger(std::move(bTrigger));
 
-    if (AUTON == Auton::SKILLS && autonCommand) {
-        CommandScheduler::schedule(autonCommand);
+    if (AutonSelector::getAuton() == Auton::SKILLS && autonCommand) {
+        CommandScheduler::schedule(autonCommand.get());
     }
 
     while (true) {
-        if (AUTON == Auton::SKILLS && autonCommand && autonCommand->isScheduled() &&
+        if (AutonSelector::getAuton() == Auton::SKILLS &&
+            autonCommand && autonCommand->isScheduled() &&
             partner.get_digital(DIGITAL_RIGHT)) {
             autonCommand->cancel();
         }

@@ -74,9 +74,6 @@
 // Autonomous
 #include "autonomous/autons.h"
 #include "autonomous/sharedCommands.h"
-#include "autonomous/negativeAutons.h"
-#include "autonomous/positiveAutons.h"
-#include "autonomous/skillsAuton.h"
 #include "autonomous/autonCommands.h"
 
 // ── Competition entrypoints ─────────────────────────────────────────────────

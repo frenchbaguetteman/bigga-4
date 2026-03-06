@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Eigen/Dense"
+#include "autonomous/autons.h"
 #include <string>
 
 namespace BrainScreen {
@@ -17,6 +18,8 @@ struct RuntimeViewModel {
     Eigen::Vector3f pureMclPose = Eigen::Vector3f(0, 0, 0);
     Eigen::Vector3f gpsPose = Eigen::Vector3f(0, 0, 0);
     Eigen::Vector3f combinedPose = Eigen::Vector3f(0, 0, 0);
+    Auton selectedAuton = Auton::NONE;
+    Alliance selectedAlliance = Alliance::RED;
     std::string auton = "";
     std::string alliance = "";
     std::string status = "";

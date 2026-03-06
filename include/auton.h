@@ -19,5 +19,5 @@
 #define DEFAULT_ALLIANCE Alliance::RED
 #endif
 
-inline Auton  AUTON    = SELECTED_AUTON;
-inline Alliance ALLIANCE = DEFAULT_ALLIANCE;
+inline constexpr Auton DEFAULT_AUTON_SELECTION = SELECTED_AUTON;
+inline constexpr Alliance DEFAULT_ALLIANCE_SELECTION = DEFAULT_ALLIANCE;

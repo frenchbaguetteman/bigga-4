@@ -58,8 +58,13 @@ public:
         }
 
         size_t activeSensorCount = 0;
+        size_t activeAbsoluteSensorCount = 0;
         for (auto* sensor : m_sensors) {
-            if (sensor && sensor->hasObservation()) ++activeSensorCount;
+            if (!sensor || !sensor->hasObservation()) continue;
+            ++activeSensorCount;
+            if (sensor->isAbsolutePositionSensor()) {
+                ++activeAbsoluteSensorCount;
+            }
         }
 
         Eigen::Vector2f delta = m_predictionFunction();
@@ -153,7 +158,7 @@ public:
                 correctionDx * correctionDx + correctionDy * correctionDy);
 
             std::printf(
-                "[PFDBG] prior=(%.3f,%.3f,%.3f) post=(%.3f,%.3f,%.3f) corr=(%+.3f,%+.3f)|%.3f delta=(%.3f,%.3f)|%.3f sensors=%zu/%zu used=%c ess=%.1f/%zu resample=%c\n",
+                "[PFDBG] prior=(%.3f,%.3f,%.3f) post=(%.3f,%.3f,%.3f) corr=(%+.3f,%+.3f)|%.3f delta=(%.3f,%.3f)|%.3f sensors=%zu/%zu abs=%zu used=%c ess=%.1f/%zu resample=%c\n",
                 priorPrediction.x(),
                 priorPrediction.y(),
                 priorPrediction.z(),
@@ -168,6 +173,7 @@ public:
                 delta.norm(),
                 activeSensorCount,
                 m_sensors.size(),
+                activeAbsoluteSensorCount,
                 usedMeasurements ? 'Y' : 'N',
                 ess,
                 L,
@@ -184,6 +190,7 @@ public:
         }
 
         m_lastActiveSensorCount = activeSensorCount;
+        m_lastActiveAbsoluteSensorCount = activeAbsoluteSensorCount;
         m_lastUsedMeasurements = usedMeasurements;
         m_lastDidResample = didResample;
         m_lastEss = ess;
@@ -193,6 +200,7 @@ public:
 
     Eigen::Vector3f getPrediction() const { return m_prediction; }
     size_t getLastActiveSensorCount() const { return m_lastActiveSensorCount; }
+    size_t getLastActiveAbsoluteSensorCount() const { return m_lastActiveAbsoluteSensorCount; }
     bool lastUpdateUsedMeasurements() const { return m_lastUsedMeasurements; }
     bool lastUpdateDidResample() const { return m_lastDidResample; }
     double getLastEss() const { return m_lastEss; }
@@ -216,6 +224,7 @@ private:
     Eigen::Vector3f m_prediction;
     uint32_t m_lastDebugTime = 0;
     size_t m_lastActiveSensorCount = 0;
+    size_t m_lastActiveAbsoluteSensorCount = 0;
     bool m_lastUsedMeasurements = false;
     bool m_lastDidResample = false;
     double m_lastEss = 0.0;
