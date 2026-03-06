@@ -136,7 +136,7 @@ public:
         : m_gps(port)
         , m_headingOffsetDeg(headingOffsetDeg)
         , m_offset(offsetX_m, offsetY_m)
-        , m_stddev(stddev) {}
+        , m_stddev(std::max(stddev, 0.005f)) {}
 
     void update() override {
         const std::optional<GpsLocalization::FieldReading> reading =
@@ -179,6 +179,7 @@ public:
                                        std::min(CONFIG::GPS_STDDEV_MAX.convert(meter), currentStddev));
             }
         }
+        currentStddev = std::max(currentStddev, 0.005f);
 
         float dx = particle.x() - m_robotCenter->x();
         float dy = particle.y() - m_robotCenter->y();
