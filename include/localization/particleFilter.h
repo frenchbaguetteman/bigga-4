@@ -407,6 +407,10 @@ private:
     }
 
     Eigen::Vector3f computeMean(float heading) const {
+        if (L == 0) {
+            return Eigen::Vector3f(0.0f, 0.0f, heading);
+        }
+
         Eigen::Vector2f sum(0.0f, 0.0f);
         for (const auto& particle : m_particles) sum += particle;
         sum /= static_cast<float>(L);

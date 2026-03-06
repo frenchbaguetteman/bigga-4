@@ -619,12 +619,21 @@ static void localizationInit() {
     }
 
     auto predictionFn = [&]() -> Eigen::Vector2f {
+        if (!drivetrain) {
+            return Eigen::Vector2f(0.0f, 0.0f);
+        }
+
         Eigen::Vector2f proposal = drivetrain->consumePendingFwdOnlyDisplacement();
         drivetrain->consumePendingDisplacement();
-        return proposal;
+        return LocMath::isFiniteVec2(proposal) ? proposal : Eigen::Vector2f(0.0f, 0.0f);
     };
     auto angleFn = [&]() -> QAngle {
-        return QAngle(drivetrain->getHeading());
+        if (!drivetrain) {
+            return QAngle(0.0f);
+        }
+
+        const float heading = drivetrain->getHeading();
+        return QAngle(LocMath::isFinite(heading) ? heading : 0.0f);
     };
 
     Eigen::Vector3f startPose = acquireInitialPose();
