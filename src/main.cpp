@@ -105,7 +105,7 @@ static std::optional<GpsPoseSample> sampleGpsPose() {
             *uiGps,
             CONFIG::MCL_GPS_HEADING_OFFSET_deg,
             true);
-    if (!reading || reading->errorM > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
+    if (!reading || reading->errorM > CONFIG::GPS_ERROR_THRESHOLD.convert(meter)) {
         return std::nullopt;
     }
 
@@ -122,7 +122,7 @@ static Eigen::Vector3f computeCombinedPose() {
     }
 
     const float motionNorm = drivetrain ? drivetrain->getLastStepDisplacementDebug().norm() : 0.0f;
-    const bool still = motionNorm <= CONFIG::LOC_FUSION_STILLNESS_DEADBAND.getValue();
+    const bool still = motionNorm <= CONFIG::LOC_FUSION_STILLNESS_DEADBAND.convert(meter);
 
     bool haveTarget = false;
     Eigen::Vector2f targetCorrection = combinedCorrection;
@@ -131,12 +131,12 @@ static Eigen::Vector3f computeCombinedPose() {
 
     const std::optional<GpsPoseSample> gpsSample = sampleGpsPose();
     if (still && gpsSample &&
-        gpsSample->errorM <= CONFIG::LOC_GPS_RUNTIME_ERROR_MAX.getValue()) {
+        gpsSample->errorM <= CONFIG::LOC_GPS_RUNTIME_ERROR_MAX.convert(meter)) {
         targetCorrection = Eigen::Vector2f(
             gpsSample->pose.x() - odom.x(),
             gpsSample->pose.y() - odom.y());
-        maxCorrection = CONFIG::LOC_GPS_CORRECTION_MAX.getValue();
-        maxStep = CONFIG::LOC_GPS_CORRECTION_STEP.getValue();
+        maxCorrection = CONFIG::LOC_GPS_CORRECTION_MAX.convert(meter);
+        maxStep = CONFIG::LOC_GPS_CORRECTION_STEP.convert(meter);
         haveTarget = true;
     } else if (!still && particleFilter) {
         const Eigen::Vector3f pf = particleFilter->getPrediction();
@@ -150,10 +150,10 @@ static Eigen::Vector3f computeCombinedPose() {
             (particleFilter->getLastActiveAbsoluteSensorCount() > 0 ||
              particleFilter->getLastActiveSensorCount() >=
                 static_cast<size_t>(CONFIG::LOC_MCL_MIN_ACTIVE_SENSORS)) &&
-            correctionJump <= CONFIG::LOC_MCL_CORRECTION_JUMP_REJECT.getValue()) {
+            correctionJump <= CONFIG::LOC_MCL_CORRECTION_JUMP_REJECT.convert(meter)) {
             targetCorrection = pfCorrection;
-            maxCorrection = CONFIG::LOC_MCL_CORRECTION_MAX.getValue();
-            maxStep = CONFIG::LOC_MCL_CORRECTION_STEP.getValue();
+            maxCorrection = CONFIG::LOC_MCL_CORRECTION_MAX.convert(meter);
+            maxStep = CONFIG::LOC_MCL_CORRECTION_STEP.convert(meter);
             haveTarget = true;
         }
     }
@@ -335,9 +335,9 @@ static void subsystemInit() {
 static Eigen::Vector3f acquireInitialPose() {
     // Fallback pose from config (inches → metres, compass-deg → internal-rad)
     Eigen::Vector3f configPose(
-        CONFIG::START_POSE_X.getValue(),
-        CONFIG::START_POSE_Y.getValue(),
-        CONFIG::START_POSE_THETA.getValue());
+        CONFIG::START_POSE_X.convert(meter),
+        CONFIG::START_POSE_Y.convert(meter),
+        CONFIG::START_POSE_THETA.convert(radian));
 
     if (CONFIG::STARTUP_POSE_MODE ==
         CONFIG::StartupPoseMode::ConfiguredStartPoseOnly) {
@@ -371,7 +371,7 @@ static Eigen::Vector3f acquireInitialPose() {
                 gps,
                 CONFIG::MCL_GPS_HEADING_OFFSET_deg,
                 requireGpsHeadingDuringPoll);
-        if (!reading || reading->errorM > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
+        if (!reading || reading->errorM > CONFIG::GPS_ERROR_THRESHOLD.convert(meter)) {
             pros::delay(pollDelayMs);
             continue;
         }
@@ -387,7 +387,7 @@ static Eigen::Vector3f acquireInitialPose() {
 
         if (hasLast) {
             const float drift = (reading->sensorFieldPos - lastFieldPos).norm();
-            if (drift < CONFIG::STARTUP_GPS_READY_ERROR.getValue()) {
+            if (drift < CONFIG::STARTUP_GPS_READY_ERROR.convert(meter)) {
                 ++stableCount;
             } else {
                 stableCount = 0;
@@ -477,24 +477,24 @@ static void localizationInit() {
         CONFIG::MCL_GPS_HEADING_OFFSET_deg,
         CONFIG::GPS_OFFSET.x(),
         CONFIG::GPS_OFFSET.y(),
-        CONFIG::GPS_STDDEV_BASE.getValue());
+        CONFIG::GPS_STDDEV_BASE.convert(meter));
 
     static DistanceSensorModel distLeft(
         CONFIG::MCL_LEFT_DISTANCE_PORT,  CONFIG::DIST_LEFT_OFFSET,
         static_cast<float>(CONFIG::MCL_LEFT_DISTANCE_WEIGHT),
-        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distLeft");
+        CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distLeft");
     static DistanceSensorModel distRight(
         CONFIG::MCL_RIGHT_DISTANCE_PORT, CONFIG::DIST_RIGHT_OFFSET,
         static_cast<float>(CONFIG::MCL_RIGHT_DISTANCE_WEIGHT),
-        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distRight");
+        CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distRight");
     static DistanceSensorModel distFront(
         CONFIG::MCL_FRONT_DISTANCE_PORT, CONFIG::DIST_FRONT_OFFSET,
         static_cast<float>(CONFIG::MCL_FRONT_DISTANCE_WEIGHT),
-        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distFront");
+        CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distFront");
     static DistanceSensorModel distBack(
         CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::DIST_BACK_OFFSET,
         static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT),
-        CONFIG::MCL_DISTANCE_STDDEV.getValue(), "distBack");
+        CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distBack");
 
     if (CONFIG::MCL_ENABLE_GPS_SENSOR) {
         sensors.push_back(&gpsSensor);

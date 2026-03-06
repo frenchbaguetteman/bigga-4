@@ -132,7 +132,7 @@ public:
                             float headingOffsetDeg = 0.0f,
                             float offsetX_m = 0.0f,
                             float offsetY_m = 0.0f,
-                            float stddev = CONFIG::GPS_STDDEV_BASE.getValue())
+                            float stddev = CONFIG::GPS_STDDEV_BASE.convert(meter))
         : m_gps(port)
         , m_headingOffsetDeg(headingOffsetDeg)
         , m_offset(offsetX_m, offsetY_m)
@@ -149,7 +149,7 @@ public:
         m_lastError = reading->errorM;
 
         // If GPS error exceeds threshold, skip this update (don't trust it)
-        if (m_lastError > CONFIG::GPS_ERROR_THRESHOLD.getValue()) {
+        if (m_lastError > CONFIG::GPS_ERROR_THRESHOLD.convert(meter)) {
             m_robotCenter = std::nullopt;
             return;
         }
@@ -169,14 +169,14 @@ public:
         // Adaptively adjust stddev based on GPS error
         float currentStddev = m_stddev;
         if (m_lastError >= 0.0f) {
-            if (m_lastError > CONFIG::GPS_ERROR_GOOD.getValue()) {
+            if (m_lastError > CONFIG::GPS_ERROR_GOOD.convert(meter)) {
                 // GPS error is higher than ideal; inflate stddev to reduce GPS influence
-                float excessError = m_lastError - CONFIG::GPS_ERROR_GOOD.getValue();
+                float excessError = m_lastError - CONFIG::GPS_ERROR_GOOD.convert(meter);
                 float inflationFactor = 1.0f + CONFIG::GPS_ERROR_SCALE_MULTIPLIER * excessError;
                 currentStddev = m_stddev * inflationFactor;
                 // Clamp to configured limits
-                currentStddev = std::max(CONFIG::GPS_STDDEV_MIN.getValue(),
-                                       std::min(CONFIG::GPS_STDDEV_MAX.getValue(), currentStddev));
+                currentStddev = std::max(CONFIG::GPS_STDDEV_MIN.convert(meter),
+                                       std::min(CONFIG::GPS_STDDEV_MAX.convert(meter), currentStddev));
             }
         }
 

@@ -27,7 +27,7 @@ inline float angleDifference(float target, float current) {
 
 /** QAngle overload. */
 inline QAngle angleDifference(QAngle target, QAngle current) {
-    return QAngle(angleDifference(target.getValue(), current.getValue()));
+    return QAngle(angleDifference(target.convert(radian), current.convert(radian)));
 }
 
 // ── Numeric helpers ─────────────────────────────────────────────────────────

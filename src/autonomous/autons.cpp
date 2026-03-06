@@ -72,7 +72,7 @@ MotionProfile buildProfile(std::initializer_list<Eigen::Vector3f> waypoints,
     }
 
     ProfileConstraints constraints{
-        QVelocity(maxVelocityMps),
+        QSpeed(maxVelocityMps),
         QAcceleration(maxAccelerationMps2),
     };
     TrapezoidalVelocityProfile velocityProfile(QLength(path.totalLength()), constraints);

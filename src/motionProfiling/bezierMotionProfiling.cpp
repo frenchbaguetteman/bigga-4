@@ -53,7 +53,7 @@ MotionProfile buildBezierProfile(
     // 2. Build velocity profile over total arc length
     QLength totalLen(path.totalLength());
     TrapezoidalVelocityProfile velProfile(
-        totalLen, constraints, QVelocity(initialSpeed), QVelocity(endSpeed));
+        totalLen, constraints, QSpeed(initialSpeed), QSpeed(endSpeed));
 
     // 3. Assemble
     return MotionProfile(path, velProfile, sampleCount);
@@ -98,10 +98,10 @@ MotionProfile buildProfileFromJson(const std::string& jsonStr) {
     float initSpeed = root.has("initialSpeed") ? root["initialSpeed"].asFloat() : 0.0f;
     float endSpeed  = root.has("endSpeed")     ? root["endSpeed"].asFloat()     : 0.0f;
 
-    ProfileConstraints constraints{QVelocity(maxV), QAcceleration(maxA)};
+    ProfileConstraints constraints{QSpeed(maxV), QAcceleration(maxA)};
     QLength totalLen(path.totalLength());
     TrapezoidalVelocityProfile velProfile(totalLen, constraints,
-                                           QVelocity(initSpeed), QVelocity(endSpeed));
+                                           QSpeed(initSpeed), QSpeed(endSpeed));
 
     return MotionProfile(path, velProfile);
 }

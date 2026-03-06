@@ -4,7 +4,7 @@ This guide is the operator and team-facing overview for the current robot code i
 
 For deeper references, start with:
 
-- [docs/README.md](README.md)
+- [Docs Home](index.md)
 - [docs/MOTION_REFERENCE.md](MOTION_REFERENCE.md)
 - [docs/TUTORIALS.md](TUTORIALS.md)
 - [docs/API_REFERENCE.md](API_REFERENCE.md)

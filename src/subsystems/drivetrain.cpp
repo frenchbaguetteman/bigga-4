@@ -162,21 +162,21 @@ float Drivetrain::rawForwardDistance() const {
         // Rotation sensor: centidegrees → radians → metres
         float centideg = static_cast<float>(m_verticalTracking->get_position());
         float radians  = centideg / 100.0f * static_cast<float>(M_PI) / 180.0f;
-        return radians * CONFIG::ODOM_RADIUS.getValue();
+        return radians * CONFIG::ODOM_RADIUS.convert(meter);
     }
     // Fallback: average of left/right drive motor encoder positions
     // MotorGroup::get_position() returns degrees (average of all motors)
     float leftDeg  = static_cast<float>(m_left.get_position());
     float rightDeg = static_cast<float>(m_right.get_position());
     float avgDeg   = (leftDeg + rightDeg) / 2.0f;
-    return (avgDeg / 360.0f) * 2.0f * static_cast<float>(M_PI) * CONFIG::DRIVE_RADIUS.getValue();
+    return (avgDeg / 360.0f) * 2.0f * static_cast<float>(M_PI) * CONFIG::DRIVE_RADIUS.convert(meter);
 }
 
 float Drivetrain::rawLateralDistance() const {
     if (m_horizontalTracking) {
         float centideg = static_cast<float>(m_horizontalTracking->get_position());
         float radians  = centideg / 100.0f * static_cast<float>(M_PI) / 180.0f;
-        return radians * CONFIG::ODOM_RADIUS.getValue();
+        return radians * CONFIG::ODOM_RADIUS.convert(meter);
     }
     return 0.0f;  // no horizontal tracking → no lateral correction
 }
@@ -201,7 +201,7 @@ void Drivetrain::updateOdometry() {
     float dTheta = normalizeAngleRad(heading - m_prevHeading);
 
     // Correct lateral for tracking-wheel arc during turns
-    float dLatCorrected = dLat - CONFIG::LATERAL_WHEEL_OFFSET.getValue() * dTheta;
+    float dLatCorrected = dLat - CONFIG::LATERAL_WHEEL_OFFSET.convert(meter) * dTheta;
 
     m_prevForwardDist = fwd;
     m_prevLateralDist = lat;

@@ -12,9 +12,8 @@
  *   • Heading units: radians
  *   • Field frame: +X east/forward (θ=0), +Y north/left, positive CCW
  *
- * All human-tuned configuration inputs are specified in inch/deg/ms-style
- * constants (`*_in`, `*_deg`, `*_ms`, etc.). Internally, these are converted
- * once into typed SI quantities using `QLength`, `QAngle`, `QTime`, etc.
+ * Human-facing configuration values use Okapi-style typed quantities and
+ * literals such as `24_in`, `90_deg`, `250_ms`, and `2_mps`.
  *
  * VEX GPS convention (API boundary only):
  *   • Position units: metres (Cartesian, origin at field center)
@@ -46,30 +45,6 @@ constexpr float CM_TO_IN  = 1.0f / 2.54f;
 constexpr float PI_F      = 3.14159265358979323846f;
 constexpr float DEG_TO_RAD = PI_F / 180.0f;
 constexpr float RAD_TO_DEG = 180.0f / PI_F;
-
-constexpr QLength length_from_in(float inches) {
-    return inches * inch;
-}
-
-constexpr QTime time_from_ms(float milliseconds) {
-    return milliseconds * millisecond;
-}
-
-constexpr QAngle angle_from_deg(float degrees) {
-    return degrees * degree;
-}
-
-constexpr QAngle angle_from_rad(float radians) {
-    return radians * radian;
-}
-
-constexpr QVelocity velocity_from_inps(float inchesPerSecond) {
-    return inchesPerSecond * inch / second;
-}
-
-constexpr QAcceleration acceleration_from_inps2(float inchesPerSecondSq) {
-    return inchesPerSecondSq * inch / (second * second);
-}
 
 inline float wrapAngleRadians(float angleRad) {
     return std::atan2(std::sin(angleRad), std::cos(angleRad));
@@ -150,18 +125,18 @@ constexpr float ODOM_RADIUS_in  = 1.375f;
 constexpr float TRACK_WIDTH_in  = 11.338583f;
 constexpr float WHEEL_BASE_in   = 10.15748f;
 
-inline constexpr QLength DRIVE_RADIUS = length_from_in(DRIVE_RADIUS_in);
-inline constexpr QLength ODOM_RADIUS  = length_from_in(ODOM_RADIUS_in);
-inline constexpr QLength TRACK_WIDTH  = length_from_in(TRACK_WIDTH_in);
-inline constexpr QLength WHEEL_BASE   = length_from_in(WHEEL_BASE_in);
+inline constexpr QLength DRIVE_RADIUS = DRIVE_RADIUS_in * inch;
+inline constexpr QLength ODOM_RADIUS  = ODOM_RADIUS_in * inch;
+inline constexpr QLength TRACK_WIDTH  = TRACK_WIDTH_in * inch;
+inline constexpr QLength WHEEL_BASE   = WHEEL_BASE_in * inch;
 
 // ── Noise model ─────────────────────────────────────────────────────────────
 
 constexpr float DRIVE_NOISE_in  = 0.15748f;
 constexpr float ANGLE_NOISE_deg = 0.572958f;
 
-inline constexpr QLength DRIVE_NOISE = length_from_in(DRIVE_NOISE_in);
-inline constexpr QAngle ANGLE_NOISE = angle_from_deg(ANGLE_NOISE_deg);
+inline constexpr QLength DRIVE_NOISE = DRIVE_NOISE_in * inch;
+inline constexpr QAngle ANGLE_NOISE = ANGLE_NOISE_deg * degree;
 
 // ── Drivetrain Motor Ports (negative = reversed) ────────────────────────────
 
@@ -184,7 +159,7 @@ constexpr int  HORIZONTAL_TRACKING_PORT      = 16;       // keep disabled until 
 constexpr bool VERTICAL_TRACKING_REVERSED    = false;
 constexpr bool HORIZONTAL_TRACKING_REVERSED  = false;
 constexpr float LATERAL_WHEEL_OFFSET_in      = -1.771654f;
-inline constexpr QLength LATERAL_WHEEL_OFFSET = length_from_in(LATERAL_WHEEL_OFFSET_in);
+inline constexpr QLength LATERAL_WHEEL_OFFSET = LATERAL_WHEEL_OFFSET_in * inch;
 
 // ── MCL Distance Sensor Ports ───────────────────────────────────────────────
 
@@ -265,21 +240,21 @@ constexpr float MCL_FRONT_OFFSET_Y_in  = (ROBOT_LENGTH_in - 1.8f * CM_TO_IN) - R
 constexpr float MCL_GPS_OFFSET_X_in    = MCL_RIGHT_OFFSET_X_in;
 constexpr float MCL_GPS_OFFSET_Y_in    = 28.0f * CM_TO_IN - ROBOT_LENGTH_in / 2.0f;
 
-inline constexpr QLength ROBOT_WIDTH = length_from_in(ROBOT_WIDTH_in);
-inline constexpr QLength ROBOT_LENGTH = length_from_in(ROBOT_LENGTH_in);
-inline constexpr QLength MCL_LEFT_OFFSET_X = length_from_in(MCL_LEFT_OFFSET_X_in);
-inline constexpr QLength MCL_LEFT_OFFSET_Y = length_from_in(MCL_LEFT_OFFSET_Y_in);
-inline constexpr QLength MCL_RIGHT_OFFSET_X = length_from_in(MCL_RIGHT_OFFSET_X_in);
-inline constexpr QLength MCL_RIGHT_OFFSET_Y = length_from_in(MCL_RIGHT_OFFSET_Y_in);
-inline constexpr QLength MCL_BACK_OFFSET_X = length_from_in(MCL_BACK_OFFSET_X_in);
-inline constexpr QLength MCL_BACK_OFFSET_Y = length_from_in(MCL_BACK_OFFSET_Y_in);
-inline constexpr QLength MCL_FRONT_OFFSET_X = length_from_in(MCL_FRONT_OFFSET_X_in);
-inline constexpr QLength MCL_FRONT_OFFSET_Y = length_from_in(MCL_FRONT_OFFSET_Y_in);
-inline constexpr QLength MCL_GPS_OFFSET_X = length_from_in(MCL_GPS_OFFSET_X_in);
-inline constexpr QLength MCL_GPS_OFFSET_Y = length_from_in(MCL_GPS_OFFSET_Y_in);
+inline constexpr QLength ROBOT_WIDTH = ROBOT_WIDTH_in * inch;
+inline constexpr QLength ROBOT_LENGTH = ROBOT_LENGTH_in * inch;
+inline constexpr QLength MCL_LEFT_OFFSET_X = MCL_LEFT_OFFSET_X_in * inch;
+inline constexpr QLength MCL_LEFT_OFFSET_Y = MCL_LEFT_OFFSET_Y_in * inch;
+inline constexpr QLength MCL_RIGHT_OFFSET_X = MCL_RIGHT_OFFSET_X_in * inch;
+inline constexpr QLength MCL_RIGHT_OFFSET_Y = MCL_RIGHT_OFFSET_Y_in * inch;
+inline constexpr QLength MCL_BACK_OFFSET_X = MCL_BACK_OFFSET_X_in * inch;
+inline constexpr QLength MCL_BACK_OFFSET_Y = MCL_BACK_OFFSET_Y_in * inch;
+inline constexpr QLength MCL_FRONT_OFFSET_X = MCL_FRONT_OFFSET_X_in * inch;
+inline constexpr QLength MCL_FRONT_OFFSET_Y = MCL_FRONT_OFFSET_Y_in * inch;
+inline constexpr QLength MCL_GPS_OFFSET_X = MCL_GPS_OFFSET_X_in * inch;
+inline constexpr QLength MCL_GPS_OFFSET_Y = MCL_GPS_OFFSET_Y_in * inch;
 
 inline Eigen::Vector2f robot_offset_to_internal(QLength offsetXRight, QLength offsetYForward) {
-    return Eigen::Vector2f(offsetYForward.getValue(), -offsetXRight.getValue());
+    return Eigen::Vector2f(offsetYForward.convert(meter), -offsetXRight.convert(meter));
 }
 
 // GPS offset in metres, INTERNAL robot frame (+X forward, +Y left)
@@ -290,17 +265,17 @@ constexpr float MCL_RIGHT_FACING_deg = -90.0f;
 constexpr float MCL_BACK_FACING_deg  = 180.0f;
 constexpr float MCL_FRONT_FACING_deg =   0.0f;
 
-inline constexpr QAngle MCL_LEFT_FACING  = angle_from_deg(MCL_LEFT_FACING_deg);
-inline constexpr QAngle MCL_RIGHT_FACING = angle_from_deg(MCL_RIGHT_FACING_deg);
-inline constexpr QAngle MCL_BACK_FACING  = angle_from_deg(MCL_BACK_FACING_deg);
-inline constexpr QAngle MCL_FRONT_FACING = angle_from_deg(MCL_FRONT_FACING_deg);
+inline constexpr QAngle MCL_LEFT_FACING  = MCL_LEFT_FACING_deg * degree;
+inline constexpr QAngle MCL_RIGHT_FACING = MCL_RIGHT_FACING_deg * degree;
+inline constexpr QAngle MCL_BACK_FACING  = MCL_BACK_FACING_deg * degree;
+inline constexpr QAngle MCL_FRONT_FACING = MCL_FRONT_FACING_deg * degree;
 
 inline Eigen::Vector3f sensor_offset_to_internal(QLength offsetXRight,
                                                  QLength offsetYForward,
                                                  QAngle facing) {
-    return Eigen::Vector3f(offsetYForward.getValue(),
-                           -offsetXRight.getValue(),
-                           facing.getValue());
+    return Eigen::Vector3f(offsetYForward.convert(meter),
+                           -offsetXRight.convert(meter),
+                           facing.convert(radian));
 }
 
 inline const Eigen::Vector3f DIST_LEFT_OFFSET {
@@ -333,14 +308,10 @@ constexpr float MCL_DISTANCE_CONFIDENCE_EXEMPT_in       = 8.0f;
 constexpr float MCL_DISTANCE_LOW_CONFIDENCE_SIGMA_SCALE = 2.5f;
 constexpr float MCL_DISTANCE_LIKELIHOOD_FLOOR           = 0.18f;
 
-inline constexpr QLength MCL_DISTANCE_STDDEV =
-    length_from_in(MCL_DISTANCE_STDDEV_in);
-inline constexpr QLength MCL_DISTANCE_MIN_RANGE =
-    length_from_in(MCL_DISTANCE_MIN_RANGE_in);
-inline constexpr QLength MCL_DISTANCE_MAX_RANGE =
-    length_from_in(MCL_DISTANCE_MAX_RANGE_in);
-inline constexpr QLength MCL_DISTANCE_CONFIDENCE_EXEMPT =
-    length_from_in(MCL_DISTANCE_CONFIDENCE_EXEMPT_in);
+inline constexpr QLength MCL_DISTANCE_STDDEV = MCL_DISTANCE_STDDEV_in * inch;
+inline constexpr QLength MCL_DISTANCE_MIN_RANGE = MCL_DISTANCE_MIN_RANGE_in * inch;
+inline constexpr QLength MCL_DISTANCE_MAX_RANGE = MCL_DISTANCE_MAX_RANGE_in * inch;
+inline constexpr QLength MCL_DISTANCE_CONFIDENCE_EXEMPT = MCL_DISTANCE_CONFIDENCE_EXEMPT_in * inch;
 
 // If vertical tracking wheel is disabled (port 0), inflate MCL motion noise
 constexpr double MCL_DRIVE_ENCODER_FALLBACK_NOISE_SCALE = 1.75;
@@ -360,11 +331,11 @@ constexpr float GPS_STDDEV_MIN_in           = 1.968504f;
 constexpr float GPS_STDDEV_MAX_in           = 11.811024f;
 constexpr float GPS_ERROR_THRESHOLD_in      = 19.68504f;
 
-inline constexpr QLength GPS_STDDEV_BASE = length_from_in(GPS_STDDEV_BASE_in);
-inline constexpr QLength GPS_ERROR_GOOD = length_from_in(GPS_ERROR_GOOD_in);
-inline constexpr QLength GPS_STDDEV_MIN = length_from_in(GPS_STDDEV_MIN_in);
-inline constexpr QLength GPS_STDDEV_MAX = length_from_in(GPS_STDDEV_MAX_in);
-inline constexpr QLength GPS_ERROR_THRESHOLD = length_from_in(GPS_ERROR_THRESHOLD_in);
+inline constexpr QLength GPS_STDDEV_BASE = GPS_STDDEV_BASE_in * inch;
+inline constexpr QLength GPS_ERROR_GOOD = GPS_ERROR_GOOD_in * inch;
+inline constexpr QLength GPS_STDDEV_MIN = GPS_STDDEV_MIN_in * inch;
+inline constexpr QLength GPS_STDDEV_MAX = GPS_STDDEV_MAX_in * inch;
+inline constexpr QLength GPS_ERROR_THRESHOLD = GPS_ERROR_THRESHOLD_in * inch;
 
 // Distance sensors are enabled with the measured offsets above.
 constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;
@@ -378,10 +349,9 @@ constexpr float START_POSE_X_in       = 0.0f;
 constexpr float START_POSE_Y_in       = 0.0f;
 constexpr float START_POSE_THETA_deg  = 0.0f;
 
-inline constexpr QLength START_POSE_X = length_from_in(START_POSE_X_in);
-inline constexpr QLength START_POSE_Y = length_from_in(START_POSE_Y_in);
-inline constexpr QAngle START_POSE_THETA =
-    angle_from_rad(gpsHeadingDegToInternalRad(START_POSE_THETA_deg));
+inline constexpr QLength START_POSE_X = START_POSE_X_in * inch;
+inline constexpr QLength START_POSE_Y = START_POSE_Y_in * inch;
+inline constexpr QAngle START_POSE_THETA = QAngle(gpsHeadingDegToInternalRad(START_POSE_THETA_deg));
 
 constexpr bool START_POSE_KNOWN = false;
 
@@ -393,8 +363,8 @@ constexpr uint32_t STARTUP_GPS_MAX_WAIT_ms      = 8000;
 constexpr float    STARTUP_GPS_READY_ERROR_in   = 0.787402f;
 constexpr int      STARTUP_GPS_STABLE_SAMPLES   = 6;
 
-inline constexpr QTime STARTUP_GPS_MAX_WAIT = time_from_ms(static_cast<float>(STARTUP_GPS_MAX_WAIT_ms));
-inline constexpr QLength STARTUP_GPS_READY_ERROR = length_from_in(STARTUP_GPS_READY_ERROR_in);
+inline constexpr QTime STARTUP_GPS_MAX_WAIT = static_cast<float>(STARTUP_GPS_MAX_WAIT_ms) * millisecond;
+inline constexpr QLength STARTUP_GPS_READY_ERROR = STARTUP_GPS_READY_ERROR_in * inch;
 
 // ── Odom Debug Diagnostics ──────────────────────────────────────────────────
 
@@ -433,10 +403,10 @@ constexpr float MAX_DISTANCE_SINCE_UPDATE_in = 0.787402f;
 constexpr int   MAX_UPDATE_INTERVAL_MS    = 50;       // milliseconds
 constexpr float PF_STATIONARY_DEADBAND_in = 0.118110f;
 
-inline constexpr QLength FIELD_HALF_SIZE = length_from_in(FIELD_HALF_SIZE_in);
-inline constexpr QLength MAX_DISTANCE_SINCE_UPDATE = length_from_in(MAX_DISTANCE_SINCE_UPDATE_in);
-inline constexpr QLength PF_STATIONARY_DEADBAND = length_from_in(PF_STATIONARY_DEADBAND_in);
-inline constexpr QLength PF_DEBUG_CORRECTION_WARN = length_from_in(PF_DEBUG_CORRECTION_WARN_in);
+inline constexpr QLength FIELD_HALF_SIZE = FIELD_HALF_SIZE_in * inch;
+inline constexpr QLength MAX_DISTANCE_SINCE_UPDATE = MAX_DISTANCE_SINCE_UPDATE_in * inch;
+inline constexpr QLength PF_STATIONARY_DEADBAND = PF_STATIONARY_DEADBAND_in * inch;
+inline constexpr QLength PF_DEBUG_CORRECTION_WARN = PF_DEBUG_CORRECTION_WARN_in * inch;
 
 // Particle-filter robustness (anti-impoverishment / kidnapped-robot recovery)
 constexpr float PF_RESAMPLE_JITTER_SCALE      = 0.50f;  // jitter stddev = DRIVE_NOISE * scale
@@ -444,7 +414,7 @@ constexpr float PF_RANDOM_INJECTION_FRACTION  = 0.02f;  // 2% random particles a
 constexpr float PF_SENSOR_ONLY_EXPLORATION_NOISE_in = 0.0787402f;
 
 inline constexpr QLength PF_SENSOR_ONLY_EXPLORATION_NOISE =
-    length_from_in(PF_SENSOR_ONLY_EXPLORATION_NOISE_in);
+    PF_SENSOR_ONLY_EXPLORATION_NOISE_in * inch;
 
 // Odom-first localization fusion: drivetrain odom remains the controller base,
 // while GPS/MCL contribute bounded XY corrections on top of it.
@@ -458,19 +428,19 @@ constexpr float LOC_MCL_CORRECTION_STEP_in            = 0.10f;
 constexpr float LOC_MCL_CORRECTION_JUMP_REJECT_in     = 8.0f;
 
 inline constexpr QLength LOC_FUSION_STILLNESS_DEADBAND =
-    length_from_in(LOC_FUSION_STILLNESS_DEADBAND_in);
+    LOC_FUSION_STILLNESS_DEADBAND_in * inch;
 inline constexpr QLength LOC_GPS_RUNTIME_ERROR_MAX =
-    length_from_in(LOC_GPS_RUNTIME_ERROR_MAX_in);
+    LOC_GPS_RUNTIME_ERROR_MAX_in * inch;
 inline constexpr QLength LOC_GPS_CORRECTION_MAX =
-    length_from_in(LOC_GPS_CORRECTION_MAX_in);
+    LOC_GPS_CORRECTION_MAX_in * inch;
 inline constexpr QLength LOC_GPS_CORRECTION_STEP =
-    length_from_in(LOC_GPS_CORRECTION_STEP_in);
+    LOC_GPS_CORRECTION_STEP_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_MAX =
-    length_from_in(LOC_MCL_CORRECTION_MAX_in);
+    LOC_MCL_CORRECTION_MAX_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_STEP =
-    length_from_in(LOC_MCL_CORRECTION_STEP_in);
+    LOC_MCL_CORRECTION_STEP_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_JUMP_REJECT =
-    length_from_in(LOC_MCL_CORRECTION_JUMP_REJECT_in);
+    LOC_MCL_CORRECTION_JUMP_REJECT_in * inch;
 
 // ── Speed / acceleration limits ─────────────────────────────────────────────
 
@@ -478,9 +448,9 @@ constexpr float MAX_SPEED_inps         = 70.866142f;
 constexpr float MAX_ACCELERATION_inps2 = 118.11024f;
 constexpr float MAX_ANGULAR_VEL_degps  = 572.9578f;
 
-inline constexpr QVelocity MAX_SPEED = velocity_from_inps(MAX_SPEED_inps);
-inline constexpr QAcceleration MAX_ACCELERATION = acceleration_from_inps2(MAX_ACCELERATION_inps2);
-inline constexpr QAngularVelocity MAX_ANGULAR_VEL = angle_from_deg(MAX_ANGULAR_VEL_degps) / second;
+inline constexpr QSpeed MAX_SPEED = MAX_SPEED_inps * ips;
+inline constexpr QAcceleration MAX_ACCELERATION = MAX_ACCELERATION_inps2 * ips2;
+inline constexpr QAngularSpeed MAX_ANGULAR_VEL = MAX_ANGULAR_VEL_degps * dps;
 
 // ── PID gains ───────────────────────────────────────────────────────────────
 //  PID(kP, kI, kD, integralCap)  — see feedback/pid.h
@@ -506,10 +476,11 @@ constexpr float FF_kA = 400.0f;    // acceleration gain        (mV·s²/m)
 
 inline std::pair<float, float> DRIVETRAIN_FEEDFORWARD(
         float v, float omega, float a = 0.0f, float alpha = 0.0f) {
-    float v_left  = v - omega * TRACK_WIDTH.getValue() / 2.0f;
-    float v_right = v + omega * TRACK_WIDTH.getValue() / 2.0f;
-    float a_left  = a - alpha * TRACK_WIDTH.getValue() / 2.0f;
-    float a_right = a + alpha * TRACK_WIDTH.getValue() / 2.0f;
+    const float trackWidthM = TRACK_WIDTH.convert(meter);
+    float v_left  = v - omega * trackWidthM / 2.0f;
+    float v_right = v + omega * trackWidthM / 2.0f;
+    float a_left  = a - alpha * trackWidthM / 2.0f;
+    float a_right = a + alpha * trackWidthM / 2.0f;
 
     auto ff = [](float vel, float acc) -> float {
         float sign = (vel > 0.0f) ? 1.0f : ((vel < 0.0f) ? -1.0f : 0.0f);

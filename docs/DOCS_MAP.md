@@ -2,6 +2,13 @@
 
 This directory now has separate docs for operators, motion behavior, tutorials, and low-level references.
 
+If you want the pretty docs site instead of raw markdown, run:
+
+```bash
+python3 -m pip install -r ../requirements-docs.txt
+python3 -m mkdocs serve
+```
+
 ## Start Here
 
 - [USER_GUIDE.md](USER_GUIDE.md): competition-day operations, controls, hardware map, startup, and major caveats

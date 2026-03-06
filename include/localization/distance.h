@@ -28,7 +28,7 @@ public:
         int port,
         Eigen::Vector3f offset,
         float weight = 1.0f,
-        float stddev = CONFIG::MCL_DISTANCE_STDDEV.getValue(),
+        float stddev = CONFIG::MCL_DISTANCE_STDDEV.convert(meter),
         const char* name = "dist")
         : m_sensor(port)
         , m_offset(offset)
@@ -44,8 +44,8 @@ public:
 
         const float rangeM = static_cast<float>(rawMm) / 1000.0f;
         if (!LocMath::isFinite(rangeM)) return;
-        if (rangeM < CONFIG::MCL_DISTANCE_MIN_RANGE.getValue() ||
-            rangeM > CONFIG::MCL_DISTANCE_MAX_RANGE.getValue()) {
+        if (rangeM < CONFIG::MCL_DISTANCE_MIN_RANGE.convert(meter) ||
+            rangeM > CONFIG::MCL_DISTANCE_MAX_RANGE.convert(meter)) {
             return;
         }
 
@@ -131,7 +131,7 @@ private:
     const char* m_name;
 
     float effectiveStddev(const Reading& reading) const {
-        if (reading.rangeM <= CONFIG::MCL_DISTANCE_CONFIDENCE_EXEMPT.getValue()) {
+        if (reading.rangeM <= CONFIG::MCL_DISTANCE_CONFIDENCE_EXEMPT.convert(meter)) {
             return m_baseStddev;
         }
 
@@ -164,7 +164,7 @@ private:
         const float sx = particle.x() + m_offset.x() * cosT - m_offset.y() * sinT;
         const float sy = particle.y() + m_offset.x() * sinT + m_offset.y() * cosT;
 
-        const float H = CONFIG::FIELD_HALF_SIZE.getValue();
+        const float H = CONFIG::FIELD_HALF_SIZE.convert(meter);
         if (sx < -H || sx > H || sy < -H || sy > H) {
             return std::nullopt;
         }
@@ -196,7 +196,7 @@ private:
         }
 
         if (!LocMath::isFinite(minDist) ||
-            minDist > CONFIG::MCL_DISTANCE_MAX_RANGE.getValue()) {
+            minDist > CONFIG::MCL_DISTANCE_MAX_RANGE.convert(meter)) {
             return std::nullopt;
         }
 

@@ -1,6 +1,7 @@
 .d/
 bin/
 .cache/
+site/
 
 # Generated metadata
 compile_commands.json

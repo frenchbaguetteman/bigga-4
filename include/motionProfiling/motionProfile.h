@@ -33,20 +33,20 @@ public:
                   int sampleCount = 200)
         : m_path(path), m_velProfile(velProfile)
     {
-        float totalT = velProfile.totalTime().getValue();
+        float totalT = velProfile.totalTime().convert(second);
         float dt = totalT / sampleCount;
         float totalLen = path.totalLength();
 
         for (int i = 0; i <= sampleCount; ++i) {
             float t = i * dt;
             QTime qt(t);
-            float dist = velProfile.distanceAt(qt).getValue();
+            float dist = velProfile.distanceAt(qt).convert(meter);
             float frac = (totalLen > 0) ? dist / totalLen : 0.0f;
             frac = std::clamp(frac, 0.0f, 1.0f);
 
             Waypoint wp = path.interpolate(frac);
-            float vel   = velProfile.velocityAt(qt).getValue();
-            float accel = velProfile.accelerationAt(qt).getValue();
+            float vel   = velProfile.velocityAt(qt).convert(mps);
+            float accel = velProfile.accelerationAt(qt).convert(mps2);
 
             ProfileState s;
             s.pose = Eigen::Vector3f(wp.x, wp.y, wp.theta);

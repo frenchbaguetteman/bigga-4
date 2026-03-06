@@ -15,7 +15,7 @@
 #include <algorithm>
 
 struct ProfileConstraints {
-    QVelocity      maxVelocity;
+    QSpeed         maxVelocity;
     QAcceleration  maxAcceleration;
 };
 
@@ -25,8 +25,8 @@ public:
 
     TrapezoidalVelocityProfile(QLength distance,
                                 ProfileConstraints constraints,
-                                QVelocity initialSpeed = QVelocity(0),
-                                QVelocity endSpeed     = QVelocity(0))
+                                QSpeed initialSpeed = QSpeed(0),
+                                QSpeed endSpeed     = QSpeed(0))
         : m_distance(distance), m_constraints(constraints)
         , m_initialSpeed(initialSpeed), m_endSpeed(endSpeed)
     {
@@ -37,15 +37,15 @@ public:
 
     /** Distance travelled at time t. */
     QLength distanceAt(QTime t) const {
-        float ts = t.getValue();
+        float ts = t.convert(second);
         if (ts < 0.0f) return QLength(0);
 
         // Phase 1: acceleration
         if (ts <= m_ta) {
-            float v0 = m_initialSpeed.getValue();
+            float v0 = m_initialSpeed.convert(mps);
             return QLength(v0 * ts + 0.5f * m_aa * ts * ts);
         }
-        QLength d1(m_initialSpeed.getValue() * m_ta + 0.5f * m_aa * m_ta * m_ta);
+        QLength d1(m_initialSpeed.convert(mps) * m_ta + 0.5f * m_aa * m_ta * m_ta);
 
         // Phase 2: cruise
         float t2 = ts - m_ta;
@@ -61,19 +61,19 @@ public:
     }
 
     /** Velocity at time t. */
-    QVelocity velocityAt(QTime t) const {
-        float ts = t.getValue();
+    QSpeed velocityAt(QTime t) const {
+        float ts = t.convert(second);
         if (ts <= 0.0f)    return m_initialSpeed;
-        if (ts <= m_ta)    return QVelocity(m_initialSpeed.getValue() + m_aa * ts);
-        if (ts <= m_ta + m_ts) return QVelocity(m_cruiseSpeed);
+        if (ts <= m_ta)    return QSpeed(m_initialSpeed.convert(mps) + m_aa * ts);
+        if (ts <= m_ta + m_ts) return QSpeed(m_cruiseSpeed);
         float t3 = ts - m_ta - m_ts;
         if (t3 >= m_td)    return m_endSpeed;
-        return QVelocity(m_cruiseSpeed + m_ad * t3);
+        return QSpeed(m_cruiseSpeed + m_ad * t3);
     }
 
     /** Acceleration at time t. */
     QAcceleration accelerationAt(QTime t) const {
-        float ts = t.getValue();
+        float ts = t.convert(second);
         if (ts < m_ta)          return QAcceleration(m_aa);
         if (ts < m_ta + m_ts)   return QAcceleration(0);
         if (ts < m_ta + m_ts + m_td) return QAcceleration(m_ad);
@@ -92,8 +92,8 @@ public:
 private:
     QLength      m_distance{};
     ProfileConstraints m_constraints{};
-    QVelocity    m_initialSpeed{};
-    QVelocity    m_endSpeed{};
+    QSpeed       m_initialSpeed{};
+    QSpeed       m_endSpeed{};
 
     float m_ta = 0;            // accel time
     float m_ts = 0;            // cruise time
@@ -103,11 +103,11 @@ private:
     float m_ad = 0;            // decel (m/s², negative)
 
     void calculate() {
-        float d   = std::fabs(m_distance.getValue());
-        float v0  = m_initialSpeed.getValue();
-        float v1  = m_endSpeed.getValue();
-        float vMax = m_constraints.maxVelocity.getValue();
-        float aMax = m_constraints.maxAcceleration.getValue();
+        float d   = std::fabs(m_distance.convert(meter));
+        float v0  = m_initialSpeed.convert(mps);
+        float v1  = m_endSpeed.convert(mps);
+        float vMax = m_constraints.maxVelocity.convert(mps);
+        float aMax = m_constraints.maxAcceleration.convert(mps2);
 
         if (aMax <= 0.0f || vMax <= 0.0f) return;
 

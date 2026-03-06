@@ -50,7 +50,7 @@ public:
         if (L == 0) return validatePose();
 
         const QAngle headingAngle = m_angleFunction();
-        const float heading = headingAngle.getValue();
+        const float heading = headingAngle.convert(radian);
         if (!LocMath::isFinite(heading)) return validatePose();
 
         for (auto* sensor : m_sensors) {
@@ -180,7 +180,7 @@ public:
                 didResample ? 'Y' : 'N');
 
             if (!usedMeasurements ||
-                correctionNorm >= CONFIG::PF_DEBUG_CORRECTION_WARN.getValue()) {
+                correctionNorm >= CONFIG::PF_DEBUG_CORRECTION_WARN.convert(meter)) {
                 for (size_t i = 0; i < m_sensors.size(); ++i) {
                     if (m_sensors[i]) m_sensors[i]->debugPrint(m_prediction, i);
                 }
@@ -232,7 +232,7 @@ private:
     std::mt19937 m_rng{42};
 
     void initializeParticles(const Eigen::Vector3f& initialPose) {
-        const float localStddev = std::max(CONFIG::DRIVE_NOISE.getValue() * 2.0f, 0.08f);
+        const float localStddev = std::max(CONFIG::DRIVE_NOISE.convert(meter) * 2.0f, 0.08f);
         std::normal_distribution<float> localNoise(0.0f, localStddev);
         const size_t randomSeeds = std::min(
             L,
@@ -254,14 +254,14 @@ private:
         const float deltaNorm = delta.norm();
         float motionNoise = 0.0f;
 
-        if (deltaNorm >= CONFIG::PF_STATIONARY_DEADBAND.getValue()) {
-            motionNoise = CONFIG::DRIVE_NOISE.getValue();
+        if (deltaNorm >= CONFIG::PF_STATIONARY_DEADBAND.convert(meter)) {
+            motionNoise = CONFIG::DRIVE_NOISE.convert(meter);
             if constexpr (CONFIG::VERTICAL_TRACKING_PORT == 0) {
                 motionNoise *= static_cast<float>(
                     CONFIG::MCL_DRIVE_ENCODER_FALLBACK_NOISE_SCALE);
             }
         } else if (sensorsAvailable) {
-            motionNoise = CONFIG::PF_SENSOR_ONLY_EXPLORATION_NOISE.getValue();
+            motionNoise = CONFIG::PF_SENSOR_ONLY_EXPLORATION_NOISE.convert(meter);
         }
 
         std::normal_distribution<float> translationNoise(0.0f, motionNoise);
@@ -303,7 +303,7 @@ private:
         m_particles = std::move(resampledParticles);
 
         const float jitterStd =
-            CONFIG::DRIVE_NOISE.getValue() * CONFIG::PF_RESAMPLE_JITTER_SCALE;
+            CONFIG::DRIVE_NOISE.convert(meter) * CONFIG::PF_RESAMPLE_JITTER_SCALE;
         std::normal_distribution<float> jitter(0.0f, jitterStd);
         for (auto& particle : m_particles) {
             particle.x() += jitter(m_rng);
@@ -364,15 +364,15 @@ private:
     }
 
     static void constrainToField(Eigen::Vector2f& particle) {
-        const float H = CONFIG::FIELD_HALF_SIZE.getValue();
+        const float H = CONFIG::FIELD_HALF_SIZE.convert(meter);
         particle.x() = std::clamp(particle.x(), -H, H);
         particle.y() = std::clamp(particle.y(), -H, H);
     }
 
     Eigen::Vector2f randomFieldPoint() {
         std::uniform_real_distribution<float> axis(
-            -CONFIG::FIELD_HALF_SIZE.getValue(),
-            CONFIG::FIELD_HALF_SIZE.getValue());
+            -CONFIG::FIELD_HALF_SIZE.convert(meter),
+            CONFIG::FIELD_HALF_SIZE.convert(meter));
         return Eigen::Vector2f(axis(m_rng), axis(m_rng));
     }
 };
