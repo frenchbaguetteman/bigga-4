@@ -410,7 +410,10 @@ inline constexpr QLength PF_DEBUG_CORRECTION_WARN = PF_DEBUG_CORRECTION_WARN_in 
 
 // Particle-filter robustness (anti-impoverishment / kidnapped-robot recovery)
 constexpr float PF_RESAMPLE_JITTER_SCALE      = 0.50f;  // jitter stddev = DRIVE_NOISE * scale
-constexpr float PF_RANDOM_INJECTION_FRACTION  = 0.02f;  // 2% random particles after resample
+constexpr float PF_RANDOM_INJECTION_BASE_FRACTION = 0.02f;   // residual exploration after resample
+constexpr float PF_RANDOM_INJECTION_MAX_FRACTION  = 0.20f;   // cap adaptive random-particle recovery
+constexpr float PF_RECOVERY_ALPHA_SLOW           = 0.001f;  // textbook w_slow update rate
+constexpr float PF_RECOVERY_ALPHA_FAST           = 0.10f;   // textbook w_fast update rate
 constexpr float PF_SENSOR_ONLY_EXPLORATION_NOISE_in = 0.0787402f;
 
 inline constexpr QLength PF_SENSOR_ONLY_EXPLORATION_NOISE =

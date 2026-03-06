@@ -80,10 +80,16 @@ public:
         bool usedMeasurements = false;
         bool didResample = false;
         double ess = static_cast<double>(L);
+        double averageMeasurementWeight = 0.0;
+        float recoveryFraction = 0.0f;
 
         if (activeSensorCount > 0) {
             std::vector<double> logWeights(L, 0.0);
+            std::vector<double> measurementLogWeights(
+                L,
+                std::log(static_cast<double>(LocMath::LIKELIHOOD_EPS)));
             double maxLogWeight = -std::numeric_limits<double>::infinity();
+            double maxMeasurementLogWeight = -std::numeric_limits<double>::infinity();
 
             for (size_t i = 0; i < L; ++i) {
                 const Eigen::Vector3f particlePose(
@@ -94,6 +100,7 @@ public:
                 double logWeight = std::log(std::max(
                     m_weights[i],
                     static_cast<double>(LocMath::LIKELIHOOD_EPS)));
+                double measurementLogWeight = 0.0;
                 size_t particleMeasurementCount = 0;
 
                 for (auto* sensor : m_sensors) {
@@ -102,14 +109,21 @@ public:
                     const std::optional<float> likelihood = sensor->p(particlePose);
                     if (!likelihood || !std::isfinite(likelihood.value())) continue;
 
-                    logWeight += std::log(std::max(
+                    const double boundedLikelihood = std::max(
                         static_cast<double>(likelihood.value()),
-                        static_cast<double>(LocMath::LIKELIHOOD_EPS)));
+                        static_cast<double>(LocMath::LIKELIHOOD_EPS));
+                    const double logLikelihood = std::log(boundedLikelihood);
+                    logWeight += logLikelihood;
+                    measurementLogWeight += logLikelihood;
                     ++particleMeasurementCount;
                 }
 
                 if (particleMeasurementCount > 0) {
                     usedMeasurements = true;
+                    measurementLogWeights[i] = measurementLogWeight;
+                    maxMeasurementLogWeight = std::max(
+                        maxMeasurementLogWeight,
+                        measurementLogWeight);
                 }
 
                 logWeights[i] = logWeight;
@@ -118,18 +132,29 @@ public:
 
             if (usedMeasurements && std::isfinite(maxLogWeight)) {
                 double totalWeight = 0.0;
+                double stabilizedMeasurementTotal = 0.0;
                 for (size_t i = 0; i < L; ++i) {
-                    double w = std::exp(logWeights[i] - maxLogWeight);
+                    double w = safeExp(logWeights[i] - maxLogWeight);
                     if (!std::isfinite(w)) {
                         w = static_cast<double>(LocMath::LIKELIHOOD_EPS);
                     }
                     m_weights[i] = std::max(w, static_cast<double>(LocMath::LIKELIHOOD_EPS));
                     totalWeight += m_weights[i];
+
+                    if (std::isfinite(maxMeasurementLogWeight)) {
+                        stabilizedMeasurementTotal += safeExp(
+                            measurementLogWeights[i] - maxMeasurementLogWeight);
+                    }
                 }
 
                 if (totalWeight > 0.0 && std::isfinite(totalWeight)) {
                     for (double& weight : m_weights) weight /= totalWeight;
                     ess = effectiveSampleSize();
+                    averageMeasurementWeight = computeAverageImportanceWeight(
+                        maxMeasurementLogWeight,
+                        stabilizedMeasurementTotal);
+                    updateRecoveryModel(averageMeasurementWeight);
+                    recoveryFraction = computeRecoveryFraction();
                 } else {
                     std::printf("[PF] weight normalization failed, keeping prior belief\n");
                     m_weights = priorWeights;
@@ -146,7 +171,7 @@ public:
         if (usedMeasurements &&
             ess < static_cast<double>(L) * 0.55) {
             didResample = true;
-            systematicResample();
+            systematicResample(recoveryFraction);
         }
 
         const bool debugDue = CONFIG::PF_DEBUG_ENABLE &&
@@ -158,7 +183,7 @@ public:
                 correctionDx * correctionDx + correctionDy * correctionDy);
 
             std::printf(
-                "[PFDBG] prior=(%.3f,%.3f,%.3f) post=(%.3f,%.3f,%.3f) corr=(%+.3f,%+.3f)|%.3f delta=(%.3f,%.3f)|%.3f sensors=%zu/%zu abs=%zu used=%c ess=%.1f/%zu resample=%c\n",
+                "[PFDBG] prior=(%.3f,%.3f,%.3f) post=(%.3f,%.3f,%.3f) corr=(%+.3f,%+.3f)|%.3f delta=(%.3f,%.3f)|%.3f sensors=%zu/%zu abs=%zu used=%c ess=%.1f/%zu wavg=%.5e wfast=%.5e wslow=%.5e recover=%.3f resample=%c\n",
                 priorPrediction.x(),
                 priorPrediction.y(),
                 priorPrediction.z(),
@@ -177,6 +202,10 @@ public:
                 usedMeasurements ? 'Y' : 'N',
                 ess,
                 L,
+                averageMeasurementWeight,
+                m_weightFast,
+                m_weightSlow,
+                recoveryFraction,
                 didResample ? 'Y' : 'N');
 
             if (!usedMeasurements ||
@@ -194,6 +223,8 @@ public:
         m_lastUsedMeasurements = usedMeasurements;
         m_lastDidResample = didResample;
         m_lastEss = ess;
+        m_lastAverageWeight = averageMeasurementWeight;
+        m_lastRecoveryFraction = recoveryFraction;
 
         return validatePose();
     }
@@ -204,6 +235,8 @@ public:
     bool lastUpdateUsedMeasurements() const { return m_lastUsedMeasurements; }
     bool lastUpdateDidResample() const { return m_lastDidResample; }
     double getLastEss() const { return m_lastEss; }
+    double getLastAverageWeight() const { return m_lastAverageWeight; }
+    float getLastRecoveryFraction() const { return m_lastRecoveryFraction; }
 
     std::vector<Eigen::Vector3f> getParticles() const {
         std::vector<Eigen::Vector3f> out(L);
@@ -228,6 +261,10 @@ private:
     bool m_lastUsedMeasurements = false;
     bool m_lastDidResample = false;
     double m_lastEss = 0.0;
+    double m_lastAverageWeight = 0.0;
+    float m_lastRecoveryFraction = 0.0f;
+    double m_weightSlow = 0.0;
+    double m_weightFast = 0.0;
 
     std::mt19937 m_rng{42};
 
@@ -242,10 +279,9 @@ private:
             if (i < randomSeeds) {
                 m_particles[i] = randomFieldPoint();
             } else {
-                m_particles[i] = Eigen::Vector2f(
-                    initialPose.x() + localNoise(m_rng),
-                    initialPose.y() + localNoise(m_rng));
-                constrainToField(m_particles[i]);
+                m_particles[i] = sampleFieldConstrainedPoint(
+                    Eigen::Vector2f(initialPose.x(), initialPose.y()),
+                    localNoise);
             }
         }
     }
@@ -266,9 +302,9 @@ private:
 
         std::normal_distribution<float> translationNoise(0.0f, motionNoise);
         for (auto& particle : m_particles) {
-            particle.x() += delta.x() + translationNoise(m_rng);
-            particle.y() += delta.y() + translationNoise(m_rng);
-            constrainToField(particle);
+            particle = sampleFieldConstrainedPoint(
+                particle + delta,
+                translationNoise);
         }
     }
 
@@ -280,7 +316,7 @@ private:
         return sumSquares > 0.0 ? 1.0 / sumSquares : 0.0;
     }
 
-    void systematicResample() {
+    void systematicResample(float randomInjectionFraction) {
         std::vector<Eigen::Vector2f> oldParticles = m_particles;
         std::vector<Eigen::Vector2f> resampledParticles(L);
 
@@ -311,13 +347,17 @@ private:
             constrainToField(particle);
         }
 
+        randomInjectionFraction = std::clamp(
+            randomInjectionFraction,
+            0.0f,
+            CONFIG::PF_RANDOM_INJECTION_MAX_FRACTION);
         const size_t injectCount = std::min(
             L,
             static_cast<size_t>(std::round(
-                static_cast<double>(L) * CONFIG::PF_RANDOM_INJECTION_FRACTION)));
+                static_cast<double>(L) * randomInjectionFraction)));
+        std::shuffle(m_particles.begin(), m_particles.end(), m_rng);
         for (size_t k = 0; k < injectCount; ++k) {
-            const size_t indexToReplace = (k == 0) ? 0 : (m_rng() % L);
-            m_particles[indexToReplace] = randomFieldPoint();
+            m_particles[k] = randomFieldPoint();
         }
 
         const double uniformWeight = 1.0 / static_cast<double>(L);
@@ -361,6 +401,87 @@ private:
         for (const auto& particle : m_particles) sum += particle;
         sum /= static_cast<float>(L);
         return Eigen::Vector3f(sum.x(), sum.y(), heading);
+    }
+
+    static double safeExp(double value) {
+        if (!std::isfinite(value)) return 0.0;
+
+        constexpr double kMinLog = -745.0;
+        constexpr double kMaxLog = 709.0;
+        if (value <= kMinLog) return 0.0;
+        if (value >= kMaxLog) return std::numeric_limits<double>::max();
+        return std::exp(value);
+    }
+
+    double computeAverageImportanceWeight(double maxMeasurementLogWeight,
+                                          double stabilizedMeasurementTotal) const {
+        if (!std::isfinite(maxMeasurementLogWeight) ||
+            !std::isfinite(stabilizedMeasurementTotal) ||
+            stabilizedMeasurementTotal <= 0.0 ||
+            L == 0) {
+            return 0.0;
+        }
+
+        const double logAverageWeight =
+            maxMeasurementLogWeight +
+            std::log(stabilizedMeasurementTotal) -
+            std::log(static_cast<double>(L));
+        return safeExp(logAverageWeight);
+    }
+
+    void updateRecoveryModel(double averageWeight) {
+        if (!std::isfinite(averageWeight) || averageWeight <= 0.0) return;
+
+        const auto updateAverage = [averageWeight](double current, float alpha) {
+            if (!std::isfinite(current) || current <= 0.0) return averageWeight;
+            return current + static_cast<double>(alpha) * (averageWeight - current);
+        };
+
+        m_weightSlow = updateAverage(m_weightSlow, CONFIG::PF_RECOVERY_ALPHA_SLOW);
+        m_weightFast = updateAverage(m_weightFast, CONFIG::PF_RECOVERY_ALPHA_FAST);
+    }
+
+    float computeRecoveryFraction() const {
+        const float maxFraction = std::max(0.0f, CONFIG::PF_RANDOM_INJECTION_MAX_FRACTION);
+        const float baseFraction = std::clamp(
+            CONFIG::PF_RANDOM_INJECTION_BASE_FRACTION,
+            0.0f,
+            maxFraction);
+        if (!std::isfinite(m_weightSlow) ||
+            !std::isfinite(m_weightFast) ||
+            m_weightSlow <= 0.0) {
+            return baseFraction;
+        }
+
+        const double adaptiveFraction = std::max(0.0, 1.0 - (m_weightFast / m_weightSlow));
+        return std::clamp(
+            static_cast<float>(std::max(static_cast<double>(baseFraction), adaptiveFraction)),
+            0.0f,
+            maxFraction);
+    }
+
+    template <typename NoiseDistribution>
+    Eigen::Vector2f sampleFieldConstrainedPoint(const Eigen::Vector2f& mean,
+                                                NoiseDistribution& noise) {
+        constexpr int kMaxAttempts = 8;
+        Eigen::Vector2f candidate = mean;
+        for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+            candidate.x() = mean.x() + noise(m_rng);
+            candidate.y() = mean.y() + noise(m_rng);
+            if (isInsideField(candidate)) {
+                return candidate;
+            }
+        }
+
+        constrainToField(candidate);
+        return candidate;
+    }
+
+    static bool isInsideField(const Eigen::Vector2f& particle) {
+        const float H = CONFIG::FIELD_HALF_SIZE.convert(meter);
+        return LocMath::isFiniteVec2(particle) &&
+            particle.x() >= -H && particle.x() <= H &&
+            particle.y() >= -H && particle.y() <= H;
     }
 
     static void constrainToField(Eigen::Vector2f& particle) {
