@@ -46,22 +46,34 @@ inline Command* liftCycle(Lift* lift, float upDeg, float downDeg) {
 
 /** Toggle tongue pneumatic. */
 inline Command* toggleTongue(Solenoids* sol) {
-    return new InstantCommand([sol]() { sol->toggleTongue(); });
+    return new InstantCommand([sol]() {
+        sol->tongueState = !sol->tongueState;
+        sol->tongue.set_value(sol->tongueState);
+    });
 }
 
 /** Toggle wing pneumatic. */
 inline Command* toggleWing(Solenoids* sol) {
-    return new InstantCommand([sol]() { sol->toggleWing(); });
+    return new InstantCommand([sol]() {
+        sol->wingState = !sol->wingState;
+        sol->wing.set_value(sol->wingState);
+    });
 }
 
 /** Toggle select1 pneumatic. */
 inline Command* toggleSelect1(Solenoids* sol) {
-    return new InstantCommand([sol]() { sol->toggleSelect1(); });
+    return new InstantCommand([sol]() {
+        sol->select1State = !sol->select1State;
+        sol->select1.set_value(sol->select1State);
+    });
 }
 
 /** Toggle select2 pneumatic. */
 inline Command* toggleSelect2(Solenoids* sol) {
-    return new InstantCommand([sol]() { sol->toggleSelect2(); });
+    return new InstantCommand([sol]() {
+        sol->select2State = !sol->select2State;
+        sol->select2.set_value(sol->select2State);
+    });
 }
 
 } // namespace shared

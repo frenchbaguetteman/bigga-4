@@ -351,13 +351,13 @@ constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;
 // pose. This is mainly used by GPSXYPlusIMUHeading startup and for the brief
 // boot window before the final localization pose is applied.
 
-constexpr float DEFAULT_IMU_INIT_ANGLE_deg = 0.0f;
+constexpr float DEFAULT_IMU_INIT_ANGLE_deg = 180.0f;
 inline constexpr QAngle DEFAULT_IMU_INIT_ANGLE =
     QAngle(gpsHeadingDegToInternalRad(DEFAULT_IMU_INIT_ANGLE_deg));
 
 constexpr float START_POSE_X_in       = 0.0f;
 constexpr float START_POSE_Y_in       = 0.0f;
-constexpr float START_POSE_THETA_deg  = 0.0f;
+constexpr float START_POSE_THETA_deg  = 180.0f;
 
 inline constexpr QLength START_POSE_X = START_POSE_X_in * inch;
 inline constexpr QLength START_POSE_Y = START_POSE_Y_in * inch;
@@ -369,7 +369,7 @@ constexpr StartupPoseMode STARTUP_POSE_MODE =
     StartupPoseMode::GPSXYPlusIMUHeading;
 
 // GPS readiness gate used at boot
-constexpr uint32_t STARTUP_GPS_MAX_WAIT_ms      = 8000;
+constexpr uint32_t STARTUP_GPS_MAX_WAIT_ms      = 10000;
 constexpr float    STARTUP_GPS_READY_ERROR_in   = 0.787402f;
 constexpr float    STARTUP_GPS_READY_HEADING_deg = 5.0f;
 constexpr int      STARTUP_GPS_STABLE_SAMPLES   = 6;
@@ -404,10 +404,16 @@ constexpr float DRIVER_ACTIVE_BRAKE_OUTPUT_DEADBAND  = 1.0f;
 
 // ── Pneumatic (ADI) Ports ───────────────────────────────────────────────────
 
-constexpr char SELECT1_PORT = 'A';
-constexpr char SELECT2_PORT = 'B';
+constexpr char TOP_PORT = 'A';
+constexpr char SELECT_PORT = 'B';
 constexpr char TONGUE_PORT  = 'C';
 constexpr char WING_PORT    = 'D';
+
+// Aliases for the current solenoid subsystem surface:
+//   select1 = selector gate
+//   select2 = top/up pneumatic
+constexpr char SELECT1_PORT = SELECT_PORT;
+constexpr char SELECT2_PORT = TOP_PORT;
 
 // ── Localization ────────────────────────────────────────────────────────────
 

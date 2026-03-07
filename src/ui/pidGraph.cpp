@@ -56,8 +56,8 @@ void draw(int x0, int y0, int x1, int y1) {
     UITheme::drawDividerH(x0 + 1, x1 - 1, midY, ZERO);
 
     if (count == 0) {
-        UITheme::printTextf(pros::E_TEXT_MEDIUM, x0 + 10, y0 + 10,
-                            LABEL, "No PID data yet");
+        UITheme::printTextfOn(pros::E_TEXT_MEDIUM, x0 + 10, y0 + 10,
+                              LABEL, BG, "No PID data yet");
         return;
     }
 
@@ -79,8 +79,8 @@ void draw(int x0, int y0, int x1, int y1) {
 
     int visible = std::max(0, std::min(count, w - 2));
     if (visible < 2) {
-        UITheme::printTextf(pros::E_TEXT_MEDIUM, x0 + 10, y0 + 10,
-                            LABEL, "PID graph warming up");
+        UITheme::printTextfOn(pros::E_TEXT_MEDIUM, x0 + 10, y0 + 10,
+                              LABEL, BG, "PID graph warming up");
         return;
     }
 
@@ -99,12 +99,12 @@ void draw(int x0, int y0, int x1, int y1) {
     }
 
     UITheme::fillRect(UITheme::Rect{x0 + 4, y0 + 3, x0 + 72, y0 + 14}, BG);
-    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y0 + 5, ERR_COL, "POS");
-    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 34, y0 + 5, OUT_COL, "HEAD");
-    UITheme::printTextf(pros::E_TEXT_SMALL, x1 - 56, y0 + 5, TXT, "x%.1f", maxVal);
-    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y0 + 18, LABEL, "+%.1f", maxVal);
-    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, midY - 6, LABEL, "0");
-    UITheme::printTextf(pros::E_TEXT_SMALL, x0 + 6, y1 - 14, LABEL, "-%.1f", maxVal);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, x0 + 6, y0 + 5, ERR_COL, BG, "POS");
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, x0 + 34, y0 + 5, OUT_COL, BG, "HEAD");
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, x1 - 56, y0 + 5, TXT, BG, "x%.1f", maxVal);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, x0 + 6, y0 + 18, LABEL, BG, "+%.1f", maxVal);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, x0 + 6, midY - 6, LABEL, BG, "0");
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, x0 + 6, y1 - 14, LABEL, BG, "-%.1f", maxVal);
 }
 
 }  // namespace PIDGraphUI

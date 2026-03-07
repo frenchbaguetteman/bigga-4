@@ -1,20 +1,14 @@
 /**
  * @file lift.h
- * Lift subsystem — CURRENTLY DISABLED (no lift hardware wired).
+ * Lift stub — CURRENTLY DISABLED (no lift hardware wired).
  *
- * Provides a no-op stub so the rest of the codebase compiles.
- * Uncomment hardware in config.h and fill in the constructor
- * when the lift is re-wired.
+ * This is a plain no-op surface so the rest of the codebase compiles
+ * without dragging a fake scheduler subsystem around.
  */
 #pragma once
 
-#include "command/subsystem.h"
-
-class Lift : public Subsystem {
-public:
+struct Lift {
     Lift() = default;
-
-    void periodic() override {}
 
     /** Move to a target position (degrees). */
     void moveTo(float /*targetDegrees*/) {}

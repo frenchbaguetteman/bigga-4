@@ -216,8 +216,8 @@ static void drawImuInitReference() {
 
 static void drawFieldBase(const SourceSpec& spec) {
     UITheme::drawPanel(FIELD_PANEL, UITheme::kPanelAlt, UITheme::kBorderStrong, spec.accent);
-    UITheme::printTextf(pros::E_TEXT_SMALL, FIELD_PANEL.x0 + 12, FIELD_PANEL.y0 + 8,
-                        UITheme::kTextMuted, "LOCALIZATION MAP");
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, FIELD_PANEL.x0 + 12, FIELD_PANEL.y0 + 8,
+                          UITheme::kTextMuted, UITheme::kPanelAlt, "LOCALIZATION MAP");
     UITheme::drawChip(UITheme::makeRect(FIELD_PANEL.x1 - 112, FIELD_PANEL.y0 + 8, 100, 18),
                       spec.label, UITheme::kPanelMuted, spec.accent, UITheme::kText);
 
@@ -256,22 +256,25 @@ static void drawTrail() {
 
 static void drawPoseCard(const UITheme::Rect& r, const SourceSpec& spec) {
     UITheme::drawPanel(r, UITheme::kPanelMuted, spec.accent, 0, false);
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 8, UITheme::kTextMuted, "%s", spec.label);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 8,
+                          UITheme::kTextMuted, UITheme::kPanelMuted, "%s", spec.label);
 
     if (!spec.valid) {
-        UITheme::printTextf(pros::E_TEXT_MEDIUM, r.x0 + 8, r.y0 + 24, UITheme::kText, "No valid pose");
-        UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 40, UITheme::kTextSoft, "%s", spec.statusLine);
+        UITheme::printTextfOn(pros::E_TEXT_MEDIUM, r.x0 + 8, r.y0 + 24,
+                              UITheme::kText, UITheme::kPanelMuted, "No valid pose");
+        UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 40,
+                              UITheme::kTextSoft, UITheme::kPanelMuted, "%s", spec.statusLine);
         return;
     }
 
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 24,
-                        UITheme::kText, "X %+.1f in   Y %+.1f in",
-                        mToIn(spec.pose.x()), mToIn(spec.pose.y()));
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 38,
-                        UITheme::kText, "H %.1f deg",
-                        headingToCompassDeg(spec.pose.z()));
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 52,
-                        UITheme::kTextSoft, "%s", spec.statusLine);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 24,
+                          UITheme::kText, UITheme::kPanelMuted, "X %+.1f in   Y %+.1f in",
+                          mToIn(spec.pose.x()), mToIn(spec.pose.y()));
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 38,
+                          UITheme::kText, UITheme::kPanelMuted, "H %.1f deg",
+                          headingToCompassDeg(spec.pose.z()));
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 52,
+                          UITheme::kTextSoft, UITheme::kPanelMuted, "%s", spec.statusLine);
 }
 
 static void drawInfoTile(const UITheme::Rect& r,
@@ -279,30 +282,30 @@ static void drawInfoTile(const UITheme::Rect& r,
                          const char* value,
                          uint32_t accent) {
     UITheme::drawPanel(r, UITheme::kPanelMuted, accent, 0, false);
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 6,
-                        UITheme::kTextMuted, "%s", label);
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 20,
-                        UITheme::kText, "%s", value);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 6,
+                          UITheme::kTextMuted, UITheme::kPanelMuted, "%s", label);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 20,
+                          UITheme::kText, UITheme::kPanelMuted, "%s", value);
 }
 
 static void drawSensorTile(const UITheme::Rect& r,
                            const BrainScreen::RuntimeViewModel::DistanceSensorViewModel& sensor,
                            uint32_t accent) {
     UITheme::drawPanel(r, UITheme::kPanelMuted, accent, 0, false);
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 6,
-                        UITheme::kTextMuted, "%s", sensor.label.c_str());
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 6,
+                          UITheme::kTextMuted, UITheme::kPanelMuted, "%s", sensor.label.c_str());
     if (!sensor.valid) {
-        UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 19,
-                            UITheme::kText, "--");
-        UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 52, r.y0 + 19,
-                            UITheme::kTextSoft, "inv");
+        UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 19,
+                              UITheme::kText, UITheme::kPanelMuted, "--");
+        UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 52, r.y0 + 19,
+                              UITheme::kTextSoft, UITheme::kPanelMuted, "inv");
         return;
     }
 
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 19,
-                        UITheme::kText, "%.1f in", mToIn(sensor.rangeM));
-    UITheme::printTextf(pros::E_TEXT_SMALL, r.x0 + 56, r.y0 + 19,
-                        UITheme::kTextSoft, "c%d", sensor.confidence);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 8, r.y0 + 19,
+                          UITheme::kText, UITheme::kPanelMuted, "%.1f in", mToIn(sensor.rangeM));
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, r.x0 + 56, r.y0 + 19,
+                          UITheme::kTextSoft, UITheme::kPanelMuted, "c%d", sensor.confidence);
 }
 
 static void drawRobotFootprint(const Eigen::Vector3f& pose, uint32_t accent) {
@@ -416,11 +419,12 @@ static void drawMapPose(const BrainScreen::RuntimeViewModel& vm,
                         const SourceSpec& spec,
                         LocalizationView view) {
     if (!spec.valid || !isFinitePose(spec.pose)) {
-        UITheme::printCenteredf(pros::E_TEXT_MEDIUM,
-                                UITheme::Rect{MAP_X0, MAP_Y0, MAP_X0 + MAP_PX - 1, MAP_Y0 + MAP_PX - 1},
-                                MAP_Y0 + MAP_PX / 2 - 8,
-                                UITheme::kTextSoft,
-                                "No valid source pose");
+        UITheme::printCenteredfOn(pros::E_TEXT_MEDIUM,
+                                  UITheme::Rect{MAP_X0, MAP_Y0, MAP_X0 + MAP_PX - 1, MAP_Y0 + MAP_PX - 1},
+                                  MAP_Y0 + MAP_PX / 2 - 8,
+                                  UITheme::kTextSoft,
+                                  COL_FIELD,
+                                  "No valid source pose");
         return;
     }
 
@@ -490,10 +494,10 @@ static void drawGpsDetails(const BrainScreen::RuntimeViewModel& vm) {
     if (!vm.gpsPoseValid) {
         UITheme::drawPanel(UITheme::makeRect(x, y, 196, 76),
                            UITheme::kPanelMuted, UITheme::kBorder, UITheme::kBlue, false);
-        UITheme::printTextf(pros::E_TEXT_MEDIUM, x + 12, y + 18,
-                            UITheme::kText, "No GPS lock");
-        UITheme::printTextf(pros::E_TEXT_SMALL, x + 12, y + 40,
-                            UITheme::kTextSoft, "Check strip alignment and error");
+        UITheme::printTextfOn(pros::E_TEXT_MEDIUM, x + 12, y + 18,
+                              UITheme::kText, UITheme::kPanelMuted, "No GPS lock");
+        UITheme::printTextfOn(pros::E_TEXT_SMALL, x + 12, y + 40,
+                              UITheme::kTextSoft, UITheme::kPanelMuted, "Check strip alignment and error");
         return;
     }
 
@@ -601,15 +605,13 @@ void clearTrail() {
 }
 
 void update(const BrainScreen::RuntimeViewModel& vm, LocalizationView view) {
-    UITheme::drawContentBackdrop();
-
     const SourceSpec spec = sourceSpec(vm, view);
     drawFieldBase(spec);
     drawMapPose(vm, spec, view);
 
     UITheme::drawPanel(TELEMETRY_PANEL, UITheme::kPanel, UITheme::kBorderStrong, spec.accent);
-    UITheme::printTextf(pros::E_TEXT_SMALL, TELEMETRY_PANEL.x0 + 12, TELEMETRY_PANEL.y0 + 8,
-                        UITheme::kTextMuted, "SOURCE DETAILS");
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, TELEMETRY_PANEL.x0 + 12, TELEMETRY_PANEL.y0 + 8,
+                          UITheme::kTextMuted, UITheme::kPanel, "SOURCE DETAILS");
     drawPoseCard(UITheme::makeRect(TELEMETRY_PANEL.x0 + 12, TELEMETRY_PANEL.y0 + 28, 196, 56), spec);
 
     switch (view) {

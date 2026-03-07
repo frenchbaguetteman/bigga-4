@@ -7,7 +7,6 @@
 #include "command/command.h"
 #include "subsystems/lift.h"
 #include "pros/rtos.hpp"
-#include <vector>
 
 // ── Move lift to a position and hold ────────────────────────────────────────
 
@@ -22,7 +21,6 @@ public:
         if (interrupted) m_lift->stop();
     }
     bool isFinished() override { return m_lift->atTarget(); }
-    std::vector<Subsystem*> getRequirements() override { return {m_lift}; }
 
 private:
     Lift* m_lift;
@@ -40,7 +38,6 @@ public:
     void execute() override {}
     void end(bool /*interrupted*/) override { m_lift->stop(); }
     bool isFinished() override { return false; }
-    std::vector<Subsystem*> getRequirements() override { return {m_lift}; }
 
 private:
     Lift* m_lift;

@@ -93,6 +93,20 @@ inline int textWidth(pros::text_format_e_t fmt, const char* txt) {
     return static_cast<int>(std::strlen(txt)) * charWidth(fmt);
 }
 
+inline int textHeight(pros::text_format_e_t fmt) {
+    switch (fmt) {
+        case pros::E_TEXT_SMALL:
+            return 12;
+        case pros::E_TEXT_LARGE:
+        case pros::E_TEXT_LARGE_CENTER:
+            return 24;
+        case pros::E_TEXT_MEDIUM_CENTER:
+        case pros::E_TEXT_MEDIUM:
+        default:
+            return 18;
+    }
+}
+
 inline void fillRect(const Rect& r, uint32_t color) {
     Rect c = clampRect(r);
     pros::screen::set_pen(color);
@@ -135,8 +149,40 @@ inline void printTextf(pros::text_format_e_t fmt,
                        uint32_t color,
                        const char* text,
                        Params... args) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), text, args...);
+    const Rect bg = clampRect(Rect{
+        x - 1,
+        y - 1,
+        x + textWidth(fmt, buf) + 2,
+        y + textHeight(fmt),
+    });
+    fillRect(bg, kBackground);
+    pros::screen::set_eraser(kBackground);
     pros::screen::set_pen(color);
-    pros::screen::print(fmt, x, y, text, args...);
+    pros::screen::print(fmt, x, y, "%s", buf);
+}
+
+template <typename... Params>
+inline void printTextfOn(pros::text_format_e_t fmt,
+                         int x,
+                         int y,
+                         uint32_t color,
+                         uint32_t background,
+                         const char* text,
+                         Params... args) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), text, args...);
+    const Rect bg = clampRect(Rect{
+        x - 1,
+        y - 1,
+        x + textWidth(fmt, buf) + 2,
+        y + textHeight(fmt),
+    });
+    fillRect(bg, background);
+    pros::screen::set_eraser(background);
+    pros::screen::set_pen(color);
+    pros::screen::print(fmt, x, y, "%s", buf);
 }
 
 template <typename... Params>
@@ -150,6 +196,20 @@ inline void printCenteredf(pros::text_format_e_t fmt,
     std::snprintf(buf, sizeof(buf), text, args...);
     int x = r.x0 + std::max(0, (width(r) - textWidth(fmt, buf)) / 2);
     printTextf(fmt, x, y, color, "%s", buf);
+}
+
+template <typename... Params>
+inline void printCenteredfOn(pros::text_format_e_t fmt,
+                             const Rect& r,
+                             int y,
+                             uint32_t color,
+                             uint32_t background,
+                             const char* text,
+                             Params... args) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), text, args...);
+    int x = r.x0 + std::max(0, (width(r) - textWidth(fmt, buf)) / 2);
+    printTextfOn(fmt, x, y, color, background, "%s", buf);
 }
 
 inline void drawDividerH(int x0, int x1, int y, uint32_t color = kBackdropLine) {
@@ -167,7 +227,7 @@ inline void drawChip(const Rect& r,
                      uint32_t textColor) {
     fillRect(r, fill);
     outlineRect(r, border);
-    printCenteredf(pros::E_TEXT_MEDIUM, r, r.y0 + 6, textColor, "%s", label);
+    printCenteredfOn(pros::E_TEXT_MEDIUM, r, r.y0 + 6, textColor, fill, "%s", label);
 }
 
 inline void drawProgressBar(const Rect& r,

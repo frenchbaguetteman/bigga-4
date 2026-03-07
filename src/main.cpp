@@ -410,8 +410,6 @@ static void subsystemInit() {
 
     drivetrain->registerThis();
     intakes->registerThis();
-    lift->registerThis();
-    solenoids->registerThis();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -807,53 +805,83 @@ void opcontrol() {
     }
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
-    IntakeSpinCommand intakeInCommand(intakes, 127);
-    IntakeSpinCommand intakeOutCommand(intakes, -127);
     bool downBAutonLatch = false;
+    enum class IntakeMode {
+        Off,
+        Loading,
+        ScoreHigh,
+        ScoreMid,
+        ScoreLow,
+    };
+    IntakeMode intakeMode = IntakeMode::Off;
+    bool wingState = false;
+    bool tongueState = false;
+    int intakeSpeed = 0;
+    bool selectMode = false;
+    bool upMode = false;
 
     while (true) {
-        const bool r1Held = master.get_digital(DIGITAL_R1);
-        const bool r2Held = master.get_digital(DIGITAL_R2);
         const bool downHeld = master.get_digital(DIGITAL_DOWN);
         const bool bHeld = master.get_digital(DIGITAL_B);
         const bool downBHeld = downHeld && bHeld;
 
-        // Preserve command-based intake ownership while polling buttons directly.
-        if (r2Held) {
-            if (intakeInCommand.isScheduled()) {
-                intakeInCommand.cancel();
-            }
-            if (!intakeOutCommand.isScheduled()) {
-                CommandScheduler::schedule(&intakeOutCommand);
-            }
-        } else if (r1Held) {
-            if (intakeOutCommand.isScheduled()) {
-                intakeOutCommand.cancel();
-            }
-            if (!intakeInCommand.isScheduled()) {
-                CommandScheduler::schedule(&intakeInCommand);
-            }
-        } else {
-            if (intakeInCommand.isScheduled()) {
-                intakeInCommand.cancel();
-            }
-            if (intakeOutCommand.isScheduled()) {
-                intakeOutCommand.cancel();
-            }
-        }
-
-        if (master.get_digital_new_press(DIGITAL_L1)) {
-            solenoids->toggleTongue();
+        if (master.get_digital_new_press(DIGITAL_R2)) {
+            intakeMode = (intakeMode == IntakeMode::Loading)
+                ? IntakeMode::Off
+                : IntakeMode::Loading;
         }
         if (master.get_digital_new_press(DIGITAL_L2)) {
-            solenoids->toggleWing();
+            intakeMode = (intakeMode == IntakeMode::ScoreHigh)
+                ? IntakeMode::Off
+                : IntakeMode::ScoreHigh;
         }
-        if (master.get_digital_new_press(DIGITAL_A)) {
-            solenoids->toggleSelect1();
+        if (master.get_digital_new_press(DIGITAL_R1)) {
+            intakeMode = (intakeMode == IntakeMode::ScoreMid)
+                ? IntakeMode::Off
+                : IntakeMode::ScoreMid;
         }
-        if (!downHeld && master.get_digital_new_press(DIGITAL_B)) {
-            solenoids->toggleSelect2();
+        if (master.get_digital_new_press(DIGITAL_L1)) {
+            intakeMode = (intakeMode == IntakeMode::ScoreLow)
+                ? IntakeMode::Off
+                : IntakeMode::ScoreLow;
         }
+
+        switch (intakeMode) {
+            case IntakeMode::Loading:
+                intakeSpeed = 127;
+                selectMode = true;
+                upMode = false;
+                break;
+            case IntakeMode::ScoreHigh:
+                intakeSpeed = 127;
+                selectMode = true;
+                upMode = true;
+                break;
+            case IntakeMode::ScoreMid:
+                intakeSpeed = 127;
+                selectMode = false;
+                upMode = true;
+                break;
+            case IntakeMode::ScoreLow:
+                intakeSpeed = -80;
+                selectMode = false;
+                upMode = false;
+                break;
+            case IntakeMode::Off:
+            default:
+                intakeSpeed = 0;
+                break;
+        }
+
+        if (intakeSpeed == 0) {
+            intakes->stop();
+        } else {
+            intakes->spin(intakeSpeed);
+        }
+        solenoids->select1State = selectMode;
+        solenoids->select2State = upMode;
+        solenoids->select1.set_value(selectMode);
+        solenoids->select2.set_value(upMode);
 
         if (downBHeld && !downBAutonLatch &&
             !pros::competition::is_connected()) {
@@ -871,6 +899,17 @@ void opcontrol() {
         } else {
             drivetrain->resetDriverAssistState();
         }
+        if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
+                wingState = !wingState;
+            } 
+        if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+                tongueState = !tongueState;
+            }
+        
+        solenoids->wingState = wingState;
+        solenoids->tongueState = tongueState;
+        solenoids->wing.set_value(wingState);
+        solenoids->tongue.set_value(tongueState);
 
         pros::delay(20);
     }

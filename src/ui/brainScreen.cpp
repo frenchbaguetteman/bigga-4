@@ -15,7 +15,7 @@ static float clamp01(float x) {
 }
 
 void initialize() {
-    pros::screen::set_eraser(0x00000000);
+    pros::screen::set_eraser(UITheme::kBackground);
     pros::screen::erase();
 }
 
@@ -40,33 +40,33 @@ void renderInit(const InitViewModel& vm) {
     UITheme::drawPanel(brand, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kTeal);
     UITheme::drawPanel(status, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kBlue);
 
-    UITheme::printTextf(pros::E_TEXT_SMALL, brand.x0 + 14, brand.y0 + 14,
-                        UITheme::kTextMuted, "COMPETITION BRAIN");
-    UITheme::printTextf(pros::E_TEXT_LARGE, brand.x0 + 14, brand.y0 + 36,
-                        UITheme::kText, "69580A");
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 72,
-                        UITheme::kTextMuted, "System startup");
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 98,
-                        UITheme::kTextSoft, "Localization");
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 116,
-                        UITheme::kTextSoft, "Drive services");
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 134,
-                        UITheme::kTextSoft, "Screen tools");
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, brand.x0 + 14, brand.y0 + 14,
+                          UITheme::kTextMuted, UITheme::kPanelAlt, "COMPETITION BRAIN");
+    UITheme::printTextfOn(pros::E_TEXT_LARGE, brand.x0 + 14, brand.y0 + 36,
+                          UITheme::kText, UITheme::kPanelAlt, "69580A");
+    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 72,
+                          UITheme::kTextMuted, UITheme::kPanelAlt, "System startup");
+    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 98,
+                          UITheme::kTextSoft, UITheme::kPanelAlt, "Localization");
+    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 116,
+                          UITheme::kTextSoft, UITheme::kPanelAlt, "Drive services");
+    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 134,
+                          UITheme::kTextSoft, UITheme::kPanelAlt, "Screen tools");
 
     UITheme::drawChip(UITheme::makeRect(status.x0 + 18, status.y0 + 16, 92, 22),
                       "BOOT", UITheme::kTealDeep, UITheme::kTeal, UITheme::kText);
-    UITheme::printTextf(pros::E_TEXT_SMALL, status.x0 + 18, status.y0 + 48,
-                        UITheme::kTextMuted, "CURRENT STEP");
-    UITheme::printTextf(pros::E_TEXT_LARGE, status.x0 + 18, status.y0 + 64,
-                        UITheme::kText, "%s", vm.stageTitle.c_str());
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, status.x0 + 18, status.y0 + 48,
+                          UITheme::kTextMuted, UITheme::kPanel, "CURRENT STEP");
+    UITheme::printTextfOn(pros::E_TEXT_LARGE, status.x0 + 18, status.y0 + 64,
+                          UITheme::kText, UITheme::kPanel, "%s", vm.stageTitle.c_str());
 
     UITheme::drawProgressBar(progressBar, progress, UITheme::kTeal);
-    UITheme::printTextf(pros::E_TEXT_SMALL, progressBar.x0, progressBar.y0 - 12,
-                        UITheme::kTextMuted, "BOOT PROGRESS");
-    UITheme::printTextf(pros::E_TEXT_MEDIUM, progressBar.x0, progressBar.y1 + 12,
-                        UITheme::kTextSoft, "%s", vm.detail.c_str());
-    UITheme::printTextf(pros::E_TEXT_LARGE, status.x1 - 42, status.y0 + 136,
-                        UITheme::kText, "%d%%", pct);
+    UITheme::printTextfOn(pros::E_TEXT_SMALL, progressBar.x0, progressBar.y0 - 12,
+                          UITheme::kTextMuted, UITheme::kPanel, "BOOT PROGRESS");
+    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, progressBar.x0, progressBar.y1 + 12,
+                          UITheme::kTextSoft, UITheme::kPanel, "%s", vm.detail.c_str());
+    UITheme::printTextfOn(pros::E_TEXT_LARGE, status.x1 - 42, status.y0 + 136,
+                          UITheme::kText, UITheme::kPanel, "%d%%", pct);
 }
 
 void renderRuntime(const RuntimeViewModel& vm) {
