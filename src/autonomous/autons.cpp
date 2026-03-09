@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -27,9 +28,8 @@ const std::vector<Auton> kAvailableAutons = {
 
 struct RoutineContext {
     Chassis& chassis;
-    Intakes* intakes = nullptr;
-    Lift* lift = nullptr;
-    Solenoids* solenoids = nullptr;
+    Intakes& intakes;
+    Lift& lift;
     std::function<Eigen::Vector3f()> poseSource;
 };
 
@@ -55,15 +55,14 @@ ez::pose robotRelativePoint(const Eigen::Vector3f& pose, double forwardIn, doubl
     };
 }
 
-void intakeTimed(Intakes* intakes, int voltage, int milliseconds) {
-    if (!intakes) return;
-    intakes->spin(voltage);
+void intakeTimed(Intakes& intakes, int voltage, int milliseconds) {
+    intakes.spin(voltage);
     pros::delay(milliseconds);
-    intakes->stop();
+    intakes.stop();
 }
 
 void runNegative1(RoutineContext& ctx) {
-    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.intakes.spin(127);
     ctx.chassis.pid_odom_set({
         {{-47.24, -23.62}, ez::fwd, 102},
         {{-23.62, -23.62}, ez::fwd, 102},
@@ -82,7 +81,7 @@ void runNegative1(RoutineContext& ctx) {
 }
 
 void runPositive1(RoutineContext& ctx) {
-    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.intakes.spin(127);
     ctx.chassis.pid_odom_set({
         {{47.24, -23.62}, ez::fwd, 102},
         {{23.62, -23.62}, ez::fwd, 102},
@@ -101,24 +100,22 @@ void runPositive1(RoutineContext& ctx) {
 }
 
 void runSkills(RoutineContext& ctx) {
-    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.intakes.spin(127);
 
     ctx.chassis.pid_odom_set(fieldPoseInches(-11.81, -55.12), ez::fwd, 127);
     ctx.chassis.pid_wait();
     intakeTimed(ctx.intakes, -127, 400);
 
-    if (ctx.intakes) ctx.intakes->spin(127);
+    ctx.intakes.spin(127);
     ctx.chassis.pid_odom_set(fieldPoseInches(-11.81, 0.0), ez::fwd, 110);
     ctx.chassis.pid_wait();
     ctx.chassis.pid_odom_set(fieldPoseInches(11.81, 0.0), ez::fwd, 96);
     ctx.chassis.pid_wait();
     intakeTimed(ctx.intakes, -127, 400);
 
-    if (ctx.lift) {
-        ctx.lift->moveTo(180.0f);
-        pros::delay(150);
-        ctx.lift->moveTo(0.0f);
-    }
+    ctx.lift.moveTo(180.0f);
+    pros::delay(150);
+    ctx.lift.moveTo(0.0f);
 
     ctx.chassis.pid_odom_set(fieldPoseInches(47.24, 39.37), ez::fwd, 110);
     ctx.chassis.pid_wait();
@@ -161,7 +158,7 @@ void runExamplePath(RoutineContext& ctx) {
     const ez::pose p2 = robotRelativePoint(start, 36.0, -8.0);
     const ez::pose p3 = robotRelativePoint(start, 48.0, 0.0);
 
-    if (ctx.intakes) ctx.intakes->spin(96);
+    ctx.intakes.spin(96);
     ctx.chassis.pid_odom_set({
         {p1, ez::fwd, 96},
         {p2, ez::fwd, 96},
@@ -176,14 +173,11 @@ void runExamplePath(RoutineContext& ctx) {
 class AutonRoutineCommand : public Command {
 public:
     AutonRoutineCommand(const AutonBuildContext& ctx, RoutineFn routine) {
-        auto state = std::make_shared<State>();
-        state->intakes = ctx.intakes;
-        state->lift = ctx.lift;
-        state->solenoids = ctx.solenoids;
+        auto state = std::make_shared<State>(ctx.intakes, ctx.lift);
         state->poseSource = ctx.poseSource;
         state->routine = routine;
         state->chassis = std::make_shared<Chassis>(
-            ctx.drivetrain,
+            &ctx.drivetrain,
             ctx.poseSource,
             [state]() {
                 return state->cancelRequested.load();
@@ -201,9 +195,8 @@ public:
                 state->chassis->pid_targets_reset();
                 RoutineContext ctx{
                     *state->chassis,
-                    state->intakes,
-                    state->lift,
-                    state->solenoids,
+                    state->intakes.get(),
+                    state->lift.get(),
                     state->poseSource,
                 };
                 state->routine(ctx);
@@ -232,13 +225,15 @@ public:
 private:
     struct State {
         std::shared_ptr<Chassis> chassis;
-        Intakes* intakes = nullptr;
-        Lift* lift = nullptr;
-        Solenoids* solenoids = nullptr;
+        std::reference_wrapper<Intakes> intakes;
+        std::reference_wrapper<Lift> lift;
         std::function<Eigen::Vector3f()> poseSource;
         RoutineFn routine = nullptr;
         std::atomic<bool> finished{false};
         std::atomic<bool> cancelRequested{false};
+
+        State(Intakes& intakesRef, Lift& liftRef)
+            : intakes(intakesRef), lift(liftRef) {}
     };
 
     std::shared_ptr<State> m_state;
@@ -284,10 +279,12 @@ std::unique_ptr<Command> makeAutonCommand(Auton auton, const AutonBuildContext& 
         case Auton::NEGATIVE_1:
             return makeRoutineCommand(ctx, runNegative1);
         case Auton::NEGATIVE_2:
+            // TODO: implement runNegative2 — currently falls back to runNegative1
             return makeRoutineCommand(ctx, runNegative1);
         case Auton::POSITIVE_1:
             return makeRoutineCommand(ctx, runPositive1);
         case Auton::POSITIVE_2:
+            // TODO: implement runPositive2 — currently falls back to runPositive1
             return makeRoutineCommand(ctx, runPositive1);
         case Auton::EXAMPLE_MOVE:
             return makeRoutineCommand(ctx, runExampleMove);

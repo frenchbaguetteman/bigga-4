@@ -12,7 +12,6 @@
 
 #include "api.h"
 
-// ── Project headers ─────────────────────────────────────────────────────────
 #include "Eigen/Dense"
 #include "units/units.hpp"
 #include "utils/utils.h"
@@ -56,7 +55,6 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/intakes.h"
 #include "subsystems/lift.h"
-#include "subsystems/solenoids.h"
 
 // Robot commands
 #include "commands/ramsete.h"
@@ -71,10 +69,8 @@
 
 // Autonomous
 #include "autonomous/autons.h"
-#include "autonomous/sharedCommands.h"
 #include "autonomous/autonCommands.h"
 
-// ── Competition entrypoints ─────────────────────────────────────────────────
 #ifdef __cplusplus
 extern "C" {
 #endif

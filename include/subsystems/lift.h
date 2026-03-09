@@ -1,9 +1,6 @@
 /**
  * @file lift.h
- * Lift stub — CURRENTLY DISABLED (no lift hardware wired).
- *
- * This is a plain no-op surface so the rest of the codebase compiles
- * without dragging a fake scheduler subsystem around.
+ * Disabled lift stub.
  */
 #pragma once
 

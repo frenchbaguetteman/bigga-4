@@ -61,6 +61,11 @@ public:
 
             m_samples.push_back(s);
         }
+
+        // Back-fill angular velocity for the first sample using forward difference
+        if (m_samples.size() >= 2) {
+            m_samples[0].angularVelocity = m_samples[1].angularVelocity;
+        }
         m_totalTime = totalT;
     }
 

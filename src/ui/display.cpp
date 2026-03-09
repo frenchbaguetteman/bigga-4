@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "ui/theme.h"
+#include "utils/localization_math.h"
 #include "pros/screen.hpp"
 
 #include <array>
@@ -34,6 +35,7 @@ static constexpr uint32_t COL_SIGHTLINE = 0x004A657D;
 static constexpr uint32_t COL_SENSOR_RAY = UITheme::kCyan;
 static constexpr uint32_t COL_SENSOR_HIT = UITheme::kWhite;
 static constexpr uint32_t COL_IMU_INIT = 0x00D2DCE7;
+static constexpr uint32_t COL_PARTICLE = 0x00557799;  // subtle blue-grey
 
 static constexpr int TRAIL_MAX = 300;
 struct TrailPoint { int px; int py; };
@@ -74,27 +76,9 @@ static ScreenPoint toScreenPoint(const Eigen::Vector2f& point) {
 static int clampMapX(int x) { return std::max(MAP_X0, std::min(MAP_X0 + MAP_PX - 1, x)); }
 static int clampMapY(int y) { return std::max(MAP_Y0, std::min(MAP_Y0 + MAP_PX - 1, y)); }
 
-static float radToDeg(float r) {
-    return r * 180.0f / static_cast<float>(M_PI);
-}
-
-static float headingToCompassDeg(float headingRad) {
-    return CONFIG::internalRadToGpsHeadingDeg(headingRad);
-}
-
-static float wrapDeg(float deg) {
-    while (deg > 180.0f) deg -= 360.0f;
-    while (deg < -180.0f) deg += 360.0f;
-    return deg;
-}
-
-static float headingDeltaCompassDeg(float deltaRad) {
-    return wrapDeg(-radToDeg(deltaRad));
-}
-
-static float mToIn(float m) {
-    return m * 39.3701f;
-}
+static float headingToCompassDeg(float headingRad) { return LocMath::headingToCompassDeg(headingRad); }
+static float headingDeltaCompassDeg(float deltaRad) { return LocMath::headingDeltaCompassDeg(deltaRad); }
+static float mToIn(float m) { return LocMath::mToIn(m); }
 
 static uint32_t blendTrailColor(float t) {
     if (t < 0.0f) t = 0.0f;
@@ -212,6 +196,16 @@ static void drawImuInitReference() {
     UITheme::drawLine(baseX, baseY, tipX, tipY, COL_IMU_INIT);
     pros::screen::set_pen(COL_IMU_INIT);
     pros::screen::fill_circle(baseX, baseY, 2);
+}
+
+static void drawParticleCloud(const std::vector<Eigen::Vector2f>& particles) {
+    if (particles.empty()) return;
+    pros::screen::set_pen(COL_PARTICLE);
+    for (const auto& p : particles) {
+        const int px = clampMapX(toScreenX(p.x()));
+        const int py = clampMapY(toScreenY(p.y()));
+        pros::screen::draw_pixel(px, py);
+    }
 }
 
 static void drawFieldBase(const SourceSpec& spec) {
@@ -449,6 +443,7 @@ static void drawMapPose(const BrainScreen::RuntimeViewModel& vm,
     drawTrail();
 
     if (view == LocalizationView::PureMcl || view == LocalizationView::Combined) {
+        drawParticleCloud(vm.pfParticleSample);
         drawSensorSightlines(spec.pose, vm);
     }
 

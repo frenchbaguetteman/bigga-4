@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace BrainScreen {
 
@@ -37,6 +38,7 @@ struct RuntimeViewModel {
     double pfAverageWeight = 0.0;
     float pfRecoveryFraction = 0.0f;
     std::array<DistanceSensorViewModel, 4> distanceSensors{};
+    std::vector<Eigen::Vector2f> pfParticleSample;  // sparse cloud for map UI
     Auton selectedAuton = Auton::NONE;
     Alliance selectedAlliance = Alliance::RED;
     std::string auton = "";

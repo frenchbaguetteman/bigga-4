@@ -341,6 +341,19 @@ inline constexpr QLength GPS_ERROR_THRESHOLD = GPS_ERROR_THRESHOLD_in * inch;
 // Distance sensors are enabled with the measured offsets above.
 constexpr bool MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING = false;
 
+// ── Sensor Staleness ────────────────────────────────────────────────────────
+constexpr uint32_t SENSOR_STALENESS_THRESHOLD_ms = 500;
+
+// ── Dynamic Obstacle Rejection ──────────────────────────────────────────────
+// Detects other robots / unexpected obstacles in front of distance sensors.
+// When the measured distance is consistently much shorter than expected from
+// the static field model, the sensor is temporarily excluded from the
+// particle-filter weight update.
+constexpr bool     MCL_DYNAMIC_OBSTACLE_ENABLED            = true;
+constexpr float    MCL_DYNAMIC_OBSTACLE_THRESHOLD_in       = 6.0f;   // min shortfall to flag
+constexpr size_t   MCL_DYNAMIC_OBSTACLE_WINDOW_SIZE        = 8;      // ring-buffer depth
+constexpr size_t   MCL_DYNAMIC_OBSTACLE_CONSISTENCY_COUNT  = 5;      // # short reads to trigger
+
 // ── Starting Pose (field frame, inches / degrees) ───────────────────────────
 // Set these to where the robot is physically placed at boot.
 // X/Y use the canonical field axes (+X east/forward, +Y north/left).
@@ -409,11 +422,9 @@ constexpr char SELECT_PORT = 'B';
 constexpr char TONGUE_PORT  = 'C';
 constexpr char WING_PORT    = 'D';
 
-// Aliases for the current solenoid subsystem surface:
-//   select1 = selector gate
-//   select2 = top/up pneumatic
-constexpr char SELECT1_PORT = SELECT_PORT;
-constexpr char SELECT2_PORT = TOP_PORT;
+// ── Intake ───────────────────────────────────────────────────────────────────
+
+constexpr int INTAKE_STALL_CURRENT_mA = 2500;
 
 // ── Localization ────────────────────────────────────────────────────────────
 

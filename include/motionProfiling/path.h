@@ -54,10 +54,13 @@ public:
             float seg = std::sqrt(dx * dx + dy * dy);
             if (cumDist + seg >= targetDist && seg > 0) {
                 float frac = (targetDist - cumDist) / seg;
+                // Wrap heading difference across ±π boundary
+                float dTheta = m_waypoints[i].theta - m_waypoints[i - 1].theta;
+                dTheta = std::atan2(std::sin(dTheta), std::cos(dTheta));
                 return {
                     m_waypoints[i - 1].x + frac * dx,
                     m_waypoints[i - 1].y + frac * dy,
-                    m_waypoints[i - 1].theta + frac * (m_waypoints[i].theta - m_waypoints[i - 1].theta)
+                    m_waypoints[i - 1].theta + frac * dTheta
                 };
             }
             cumDist += seg;

@@ -101,7 +101,7 @@ public:
     }
 
     bool isFinished() override {
-        return m_distPid.atSetpoint();
+        return m_distPid.atSetpoint() && m_turnPid.atSetpoint();
     }
 
     std::vector<Subsystem*> getRequirements() override {

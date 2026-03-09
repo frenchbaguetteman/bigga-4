@@ -17,6 +17,7 @@
 #include "utils/localization_math.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -53,10 +54,13 @@ public:
             rangeM,
             m_sensor.get_confidence(),
         };
+        markValid();
     }
 
     bool hasObservation() const override {
-        return !CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING && m_reading.has_value();
+        return !CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING &&
+               m_reading.has_value() &&
+               !m_dynamicObstacleDetected;
     }
 
     std::optional<float> p(const Eigen::Vector3f& particle) override {
@@ -80,6 +84,48 @@ public:
     }
 
     const char* debugName() const override { return m_name; }
+
+    void checkDynamicObstacle(const Eigen::Vector3f& referencePose) override {
+        m_dynamicObstacleDetected = false;
+        if (!CONFIG::MCL_DYNAMIC_OBSTACLE_ENABLED || !m_reading) return;
+
+        const std::optional<float> expected = expectedDistance(referencePose);
+        if (!expected) return;
+
+        const float residual = m_reading->rangeM - *expected;
+
+        // Push into ring buffer
+        m_residualRing[m_residualHead] = {residual, true};
+        m_residualHead = (m_residualHead + 1) % m_residualRing.size();
+        if (m_residualCount < m_residualRing.size()) ++m_residualCount;
+
+        // Count recent consistently-short readings
+        const float threshold =
+            -CONFIG::MCL_DYNAMIC_OBSTACLE_THRESHOLD_in * CONFIG::IN_TO_M;
+        size_t shortCount = 0;
+        size_t validCount = 0;
+        const size_t windowSize = std::min(
+            m_residualCount, CONFIG::MCL_DYNAMIC_OBSTACLE_WINDOW_SIZE);
+        for (size_t i = 0; i < windowSize; ++i) {
+            const size_t idx =
+                (m_residualHead + m_residualRing.size() - 1 - i)
+                % m_residualRing.size();
+            if (m_residualRing[idx].valid) {
+                ++validCount;
+                if (m_residualRing[idx].residual < threshold) {
+                    ++shortCount;
+                }
+            }
+        }
+
+        m_dynamicObstacleDetected =
+            validCount >= CONFIG::MCL_DYNAMIC_OBSTACLE_CONSISTENCY_COUNT &&
+            shortCount >= CONFIG::MCL_DYNAMIC_OBSTACLE_CONSISTENCY_COUNT;
+    }
+
+    bool isDynamicObstacleDetected() const override {
+        return m_dynamicObstacleDetected;
+    }
 
     void debugPrint(const Eigen::Vector3f& referencePose, size_t index) const override {
         if (!m_reading) {
@@ -129,6 +175,16 @@ private:
     float m_baseStddev;
     std::optional<Reading> m_reading;
     const char* m_name;
+
+    // ── Dynamic obstacle detection ring buffer ──────────────────────────
+    struct ResidualSample {
+        float residual = 0.0f;
+        bool valid = false;
+    };
+    std::array<ResidualSample, 10> m_residualRing{};
+    size_t m_residualHead = 0;
+    size_t m_residualCount = 0;
+    bool m_dynamicObstacleDetected = false;
 
     float effectiveStddev(const Reading& reading) const {
         if (reading.rangeM <= CONFIG::MCL_DISTANCE_CONFIDENCE_EXEMPT.convert(meter)) {
@@ -290,6 +346,6 @@ private:
             return std::numeric_limits<float>::infinity();
         }
 
-        return (tMin > 0.0f) ? tMin : tMax;
+        return (tMin > 0.0f) ? tMin : 0.001f;  // origin inside → near-zero
     }
 };

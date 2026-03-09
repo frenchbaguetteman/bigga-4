@@ -5,6 +5,7 @@
 #include "ui/display.h"
 #include "ui/pidGraph.h"
 #include "ui/theme.h"
+#include "utils/localization_math.h"
 #include "pros/screen.hpp"
 #include "pros/rtos.hpp"
 
@@ -53,27 +54,9 @@ static bool inside(const UITheme::Rect& r, int x, int y) {
     return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
 }
 
-static float radToDeg(float r) {
-    return r * 180.0f / static_cast<float>(M_PI);
-}
-
-static float headingToCompassDeg(float headingRad) {
-    return CONFIG::internalRadToGpsHeadingDeg(headingRad);
-}
-
-static float wrapDeg(float deg) {
-    while (deg > 180.0f) deg -= 360.0f;
-    while (deg < -180.0f) deg += 360.0f;
-    return deg;
-}
-
-static float headingDeltaCompassDeg(float deltaRad) {
-    return wrapDeg(-radToDeg(deltaRad));
-}
-
-static float mToIn(float m) {
-    return m * 39.3701f;
-}
+static float headingToCompassDeg(float headingRad) { return LocMath::headingToCompassDeg(headingRad); }
+static float headingDeltaCompassDeg(float deltaRad) { return LocMath::headingDeltaCompassDeg(deltaRad); }
+static float mToIn(float m) { return LocMath::mToIn(m); }
 
 static const char* safeStatus(const std::string& s, int maxChars = 34) {
     static char buf[48];

@@ -57,6 +57,11 @@ public:
             if (sensor) sensor->update();
         }
 
+        // Dynamic obstacle checks use last-cycle prediction as reference
+        for (auto* sensor : m_sensors) {
+            if (sensor) sensor->checkDynamicObstacle(m_prediction);
+        }
+
         size_t activeSensorCount = 0;
         size_t activeAbsoluteSensorCount = 0;
         for (auto* sensor : m_sensors) {
@@ -221,7 +226,17 @@ public:
             if (!usedMeasurements ||
                 correctionNorm >= CONFIG::PF_DEBUG_CORRECTION_WARN.convert(meter)) {
                 for (size_t i = 0; i < m_sensors.size(); ++i) {
-                    if (m_sensors[i]) m_sensors[i]->debugPrint(m_prediction, i);
+                    if (!m_sensors[i]) continue;
+                    m_sensors[i]->debugPrint(m_prediction, i);
+                    if (m_sensors[i]->isStale(CONFIG::SENSOR_STALENESS_THRESHOLD_ms)) {
+                        std::printf("[PFDBG] sensor[%zu] %s STALE (last valid %ums ago)\n",
+                                    i, m_sensors[i]->debugName(),
+                                    pros::millis() - m_sensors[i]->lastValidReadingMs());
+                    }
+                    if (m_sensors[i]->isDynamicObstacleDetected()) {
+                        std::printf("[PFDBG] sensor[%zu] %s DYNAMIC_OBSTACLE\n",
+                                    i, m_sensors[i]->debugName());
+                    }
                 }
             }
 

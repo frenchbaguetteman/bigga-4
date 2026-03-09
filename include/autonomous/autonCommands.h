@@ -10,16 +10,14 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/intakes.h"
 #include "subsystems/lift.h"
-#include "subsystems/solenoids.h"
 
 #include <functional>
 #include <memory>
 
 struct AutonBuildContext {
-    Drivetrain* drivetrain = nullptr;
-    Intakes* intakes = nullptr;
-    Lift* lift = nullptr;
-    Solenoids* solenoids = nullptr;
+    Drivetrain& drivetrain;
+    Intakes& intakes;
+    Lift& lift;
     std::function<Eigen::Vector3f()> poseSource;
 };
 

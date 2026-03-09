@@ -6,8 +6,8 @@
 
 #include "command/command.h"
 #include "command/subsystem.h"
+#include "pros/rtos.hpp"
 #include <vector>
-#include <algorithm>
 #include <set>
 #include <functional>
 
@@ -170,16 +170,19 @@ public:
 
     ~DeadlineCommand() override { delete m_inner; }
 
-    void initialize() override { m_elapsed = 0; m_inner->initialize(); }
-    void execute() override    { m_inner->execute(); m_elapsed += 0.01f; /* ~10 ms tick */ }
+    void initialize() override { m_startTime = pros::millis(); m_inner->initialize(); }
+    void execute() override    { m_inner->execute(); }
     void end(bool i) override  { m_inner->end(i); }
-    bool isFinished() override { return m_inner->isFinished() || m_elapsed >= m_timeout; }
+    bool isFinished() override {
+        return m_inner->isFinished() ||
+               (pros::millis() - m_startTime) / 1000.0f >= m_timeout;
+    }
     std::vector<Subsystem*> getRequirements() override { return m_inner->getRequirements(); }
 
 private:
     Command* m_inner;
     float m_timeout;
-    float m_elapsed = 0;
+    uint32_t m_startTime = 0;
 };
 
 // ── ConditionalFinish wrapper ───────────────────────────────────────────────

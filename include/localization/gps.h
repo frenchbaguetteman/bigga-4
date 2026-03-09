@@ -158,6 +158,7 @@ public:
             reading->sensorFieldPos,
             reading->robotHeadingRad,
             m_offset);
+        if (m_robotCenter) markValid();
     }
 
     bool hasObservation() const override { return m_robotCenter.has_value(); }

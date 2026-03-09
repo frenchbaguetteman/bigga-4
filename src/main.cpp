@@ -10,6 +10,7 @@
  * opcontrol()  cancels it and runs arcade drive + trigger bindings.
  */
 #include "main.h"
+#include "localization/localizationFusion.h"
 #include "ui/brainScreen.h"
 #include "ui/screenManager.h"
 #include <cstdio>
@@ -18,27 +19,36 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Global subsystems & localization
-// ═══════════════════════════════════════════════════════════════════════════
+// ── RAII mutex guard for PROS (take/give) ───────────────────────────────────
+class MutexGuard {
+public:
+    explicit MutexGuard(pros::Mutex& mtx) : m_mtx(mtx) { m_mtx.take(); }
+    ~MutexGuard() { m_mtx.give(); }
+    MutexGuard(const MutexGuard&) = delete;
+    MutexGuard& operator=(const MutexGuard&) = delete;
+private:
+    pros::Mutex& m_mtx;
+};
 
-static Drivetrain* drivetrain = nullptr;
-static Intakes*    intakes    = nullptr;
-static Lift*       lift       = nullptr;
-static Solenoids*  solenoids  = nullptr;
+static Drivetrain drivetrain;
+static Intakes intakes;
+static Lift lift;
+static pros::adi::DigitalOut selector(CONFIG::SELECT_PORT);
+static pros::adi::DigitalOut top(CONFIG::TOP_PORT);
+static pros::adi::DigitalOut tongue(CONFIG::TONGUE_PORT);
+static pros::adi::DigitalOut wing(CONFIG::WING_PORT);
 
 static ParticleFilter* particleFilter = nullptr;
+static LocalizationFusion* fusion = nullptr;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Autonomous command — built on-demand, scheduled in autonomous()
-// ═══════════════════════════════════════════════════════════════════════════
+// ── Shared state protected by locMutex ──────────────────────────────────────
+static pros::Mutex locMutex;
+static Eigen::Vector3f combinedPose(0.0f, 0.0f, 0.0f);
+static std::vector<Eigen::Vector2f> sharedParticleSample;
 
 static std::unique_ptr<Command> autonCommand;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Pose source (shared lambda used by all path-followers)
-// ═══════════════════════════════════════════════════════════════════════════
 
 static std::function<Eigen::Vector3f()> poseSource;
 static std::unique_ptr<pros::Gps> uiGps;
@@ -46,27 +56,20 @@ static std::unique_ptr<pros::Distance> uiDistLeft;
 static std::unique_ptr<pros::Distance> uiDistRight;
 static std::unique_ptr<pros::Distance> uiDistFront;
 static std::unique_ptr<pros::Distance> uiDistBack;
-static Eigen::Vector3f combinedPose(0.0f, 0.0f, 0.0f);
-static Eigen::Vector2f combinedCorrection(0.0f, 0.0f);
 static uint32_t firstInitScreenMs = 0;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Status string for screen (only touched from screen task after init)
-// ═══════════════════════════════════════════════════════════════════════════
 
 static std::string screenStatus = "";
 
-struct GpsPoseSample {
-    Eigen::Vector3f pose{0.0f, 0.0f, 0.0f};
-    float errorM = -1.0f;
-};
+// GpsPoseSample is now defined in LocalizationFusion.
+using GpsPoseSample = LocalizationFusion::GpsPoseSample;
 
+// Utility aliases — canonical implementations live in LocMath::
 static float headingToCompassDeg(float headingRad) {
-    return CONFIG::internalRadToGpsHeadingDeg(headingRad);
+    return LocMath::headingToCompassDeg(headingRad);
 }
 
 static float wrapAngleRad(float angleRad) {
-    return std::atan2(std::sin(angleRad), std::cos(angleRad));
+    return LocMath::wrapAngle(angleRad);
 }
 
 static BrainScreen::RuntimeViewModel::DistanceSensorViewModel sampleDistanceSensor(
@@ -86,45 +89,6 @@ static BrainScreen::RuntimeViewModel::DistanceSensorViewModel sampleDistanceSens
     sample.rangeM = static_cast<float>(rawMm) / 1000.0f;
     sample.confidence = sensor->get_confidence();
     return sample;
-}
-
-static Eigen::Vector2f clampVectorMagnitude(const Eigen::Vector2f& v, float maxMagnitude) {
-    if (!LocMath::isFiniteVec2(v) || maxMagnitude <= 0.0f) {
-        return Eigen::Vector2f(0.0f, 0.0f);
-    }
-
-    const float norm = v.norm();
-    if (norm <= maxMagnitude || norm <= 1e-6f) return v;
-    return v * (maxMagnitude / norm);
-}
-
-static Eigen::Vector2f moveTowardsVec2(const Eigen::Vector2f& current,
-                                       const Eigen::Vector2f& target,
-                                       float maxStep) {
-    if (!LocMath::isFiniteVec2(current) || !LocMath::isFiniteVec2(target) || maxStep <= 0.0f) {
-        return current;
-    }
-
-    const Eigen::Vector2f delta = target - current;
-    const float dist = delta.norm();
-    if (dist <= maxStep || dist <= 1e-6f) return target;
-    return current + delta * (maxStep / dist);
-}
-
-static Eigen::Vector2f applyTargetDeadband(const Eigen::Vector2f& current,
-                                           const Eigen::Vector2f& target,
-                                           float deadband) {
-    if (!LocMath::isFiniteVec2(current) ||
-        !LocMath::isFiniteVec2(target) ||
-        deadband <= 0.0f) {
-        return target;
-    }
-
-    const Eigen::Vector2f delta = target - current;
-    if (delta.norm() <= deadband) {
-        return current;
-    }
-    return target;
 }
 
 static std::optional<GpsPoseSample> poseSampleFromReading(
@@ -161,81 +125,7 @@ static std::optional<GpsPoseSample> sampleGpsPose() {
     return poseSampleFromReading(*reading);
 }
 
-static Eigen::Vector3f computeCombinedPose() {
-    Eigen::Vector3f odom = drivetrain ? drivetrain->getOdomPose()
-                                      : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
-    if (!LocMath::isFinitePose(odom)) {
-        combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
-        combinedPose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
-        return combinedPose;
-    }
-
-    const float motionNorm = drivetrain ? drivetrain->getLastStepDisplacementDebug().norm() : 0.0f;
-    const bool still = motionNorm <= CONFIG::LOC_FUSION_STILLNESS_DEADBAND.convert(meter);
-
-    bool haveTarget = false;
-    Eigen::Vector2f targetCorrection = combinedCorrection;
-    float maxCorrection = 0.0f;
-    float maxStep = 0.0f;
-    float correctionDeadband = 0.0f;
-
-    const std::optional<GpsPoseSample> gpsSample = sampleGpsPose();
-    if (still && gpsSample &&
-        gpsSample->errorM <= CONFIG::LOC_GPS_RUNTIME_ERROR_MAX.convert(meter)) {
-        targetCorrection = Eigen::Vector2f(
-            gpsSample->pose.x() - odom.x(),
-            gpsSample->pose.y() - odom.y());
-        maxCorrection = CONFIG::LOC_GPS_CORRECTION_MAX.convert(meter);
-        maxStep = CONFIG::LOC_GPS_CORRECTION_STEP.convert(meter);
-        correctionDeadband = CONFIG::LOC_GPS_CORRECTION_DEADBAND.convert(meter);
-        haveTarget = true;
-    } else if (!still && particleFilter) {
-        const Eigen::Vector3f pf = particleFilter->getPrediction();
-        const Eigen::Vector2f pfCorrection(
-            pf.x() - odom.x(),
-            pf.y() - odom.y());
-        const float correctionJump = (pfCorrection - combinedCorrection).norm();
-
-        const double minEss = static_cast<double>(CONFIG::NUM_PARTICLES) *
-            static_cast<double>(CONFIG::LOC_MCL_MIN_ESS_RATIO);
-
-        if (LocMath::isFinitePose(pf) &&
-            particleFilter->lastUpdateUsedMeasurements() &&
-            particleFilter->getLastEss() >= minEss &&
-            (particleFilter->getLastActiveAbsoluteSensorCount() > 0 ||
-             particleFilter->getLastActiveSensorCount() >=
-                static_cast<size_t>(CONFIG::LOC_MCL_MIN_ACTIVE_SENSORS)) &&
-            correctionJump <= CONFIG::LOC_MCL_CORRECTION_JUMP_REJECT.convert(meter)) {
-            targetCorrection = pfCorrection;
-            maxCorrection = CONFIG::LOC_MCL_CORRECTION_MAX.convert(meter);
-            maxStep = CONFIG::LOC_MCL_CORRECTION_STEP.convert(meter);
-            correctionDeadband = CONFIG::LOC_MCL_CORRECTION_DEADBAND.convert(meter);
-            haveTarget = true;
-        }
-    }
-
-    if (haveTarget) {
-        targetCorrection = clampVectorMagnitude(targetCorrection, maxCorrection);
-        targetCorrection = applyTargetDeadband(
-            combinedCorrection,
-            targetCorrection,
-            correctionDeadband);
-        combinedCorrection = moveTowardsVec2(combinedCorrection, targetCorrection, maxStep);
-    } else if (!LocMath::isFiniteVec2(combinedCorrection)) {
-        combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
-    }
-
-    Eigen::Vector2f fusedXY(
-        odom.x() + combinedCorrection.x(),
-        odom.y() + combinedCorrection.y());
-    if (!LocMath::isFiniteVec2(fusedXY)) {
-        combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
-        fusedXY = Eigen::Vector2f(odom.x(), odom.y());
-    }
-
-    combinedPose = Eigen::Vector3f(fusedXY.x(), fusedXY.y(), odom.z());
-    return combinedPose;
-}
+// computeCombinedPose() logic is now in LocalizationFusion::update().
 
 static void renderInitStage(float progress,
                             const std::string& stage,
@@ -269,35 +159,44 @@ static void renderInitStage(float progress,
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Periodic task: command scheduler @ 10 ms
-// ═══════════════════════════════════════════════════════════════════════════
-
 void update_loop() {
     uint32_t lastDebugMs = 0;
+    int particleSampleTick = 0;
+    constexpr int PARTICLE_SAMPLE_PERIOD = 5;      // every 5 ticks ≈ 50 ms
+    constexpr size_t PARTICLE_SAMPLE_STRIDE = 25;   // 500/25 = 20 dots
+
     while (true) {
-        // CRITICAL ORDER:
-        // 1. Run CommandScheduler first — this calls drivetrain::periodic()
-        //    which calls updateOdometry() and accumulates m_pendingDisplacement
         CommandScheduler::run();
-        
-        // 2. Then run ParticleFilter::update() which calls the predictionFn lambda
-        //    EXACTLY ONCE. The filter consumes forward odometry as its motion
-        //    proposal while distance sensors handle the measurement correction.
         if (particleFilter) {
             particleFilter->update();
         }
-        Eigen::Vector3f fusedPose = computeCombinedPose();
 
-        // Rate-limited debug instrumentation
+        // ── Fusion ──────────────────────────────────────────────────────
+        Eigen::Vector3f fusedPose = fusion
+            ? fusion->update()
+            : drivetrain.getOdomPose();
+
+        // ── Publish shared state under mutex ────────────────────────────
+        {
+            MutexGuard guard(locMutex);
+            combinedPose = fusedPose;
+
+            if (++particleSampleTick >= PARTICLE_SAMPLE_PERIOD && particleFilter) {
+                particleSampleTick = 0;
+                const auto all = particleFilter->getParticles();
+                sharedParticleSample.clear();
+                sharedParticleSample.reserve(all.size() / PARTICLE_SAMPLE_STRIDE + 1);
+                for (size_t i = 0; i < all.size(); i += PARTICLE_SAMPLE_STRIDE) {
+                    sharedParticleSample.emplace_back(all[i].x(), all[i].y());
+                }
+            }
+        }
+
         if constexpr (CONFIG::ODOM_DEBUG_ENABLE) {
             uint32_t now = pros::millis();
             if (now - lastDebugMs >= CONFIG::ODOM_DEBUG_LOG_EVERY_ms) {
                 lastDebugMs = now;
-                
-                // === Raw IMU heading ===
-                float imuH = drivetrain ? drivetrain->getHeading() : 0.0f;
-                
+                float imuH = drivetrain.getHeading();
                 float gpsX = 0, gpsY = 0, gpsH = 0, gpsErr = -1.0f;
                 bool gpsOk = false;
                 if (auto gpsSample = sampleGpsPose()) {
@@ -307,16 +206,15 @@ void update_loop() {
                     gpsErr = gpsSample->errorM;
                     gpsOk = true;
                 }
-                
-                Eigen::Vector2f odomdelta = drivetrain ? drivetrain->getLastStepDisplacementDebug()
-                                                       : Eigen::Vector2f(0, 0);
+                Eigen::Vector2f odomdelta = drivetrain.getLastStepDisplacementDebug();
                 float deltaLen = odomdelta.norm();
-                
-                auto odom = drivetrain ? drivetrain->getOdomPose()
-                                       : Eigen::Vector3f(0, 0, 0);
+                auto odom = drivetrain.getOdomPose();
                 auto pf   = particleFilter ? particleFilter->getPrediction()
                                            : Eigen::Vector3f(0, 0, 0);
-                
+                const Eigen::Vector2f corr = fusion
+                    ? fusion->getCorrection()
+                    : Eigen::Vector2f(0.0f, 0.0f);
+
                 std::printf("[LOC] odom_delta=%.4f imu=%.1fdeg gps(%c)=(%.3f,%.3f,%.1fdeg,err=%.3f) "
                             "odom=(%.3f,%.3f,%.1fdeg) pf=(%.3f,%.3f,%.1fdeg) "
                             "comb=(%.3f,%.3f,%.1fdeg) corr=(%.3f,%.3f)|%.3f\n",
@@ -326,17 +224,13 @@ void update_loop() {
                     odom.x(), odom.y(), headingToCompassDeg(odom.z()),
                     pf.x(), pf.y(), headingToCompassDeg(pf.z()),
                     fusedPose.x(), fusedPose.y(), headingToCompassDeg(fusedPose.z()),
-                    combinedCorrection.x(), combinedCorrection.y(), combinedCorrection.norm());
+                    corr.x(), corr.y(), corr.norm());
             }
         }
 
         pros::delay(10);
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Periodic task: brain-screen update @ 50 ms (started AFTER init)
-// ═══════════════════════════════════════════════════════════════════════════
 
 void screen_update_loop() {
     Eigen::Vector3f lastFiniteCombined(0.0f, 0.0f, 0.0f);
@@ -349,8 +243,7 @@ void screen_update_loop() {
         vm.alliance = std::string(allianceName(vm.selectedAlliance));
         vm.status = screenStatus;
 
-        vm.pureOdomPose = drivetrain ? drivetrain->getOdomPose()
-                                     : Eigen::Vector3f(0, 0, 0);
+        vm.pureOdomPose = drivetrain.getOdomPose();
         if (!LocMath::isFinitePose(vm.pureOdomPose)) {
             std::printf("[LOC] non-finite pureOdomPose, forcing zero\n");
             vm.pureOdomPose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
@@ -363,7 +256,13 @@ void screen_update_loop() {
             vm.pureMclPose = vm.pureOdomPose;
         }
 
-        vm.combinedPose = combinedPose;
+        // ── Snapshot shared state under mutex ───────────────────────────
+        {
+            MutexGuard guard(locMutex);
+            vm.combinedPose = combinedPose;
+            vm.pfParticleSample = sharedParticleSample;
+        }
+
         if (!LocMath::isFinitePose(vm.combinedPose)) {
             vm.combinedPose = vm.pureOdomPose;
         }
@@ -398,23 +297,10 @@ void screen_update_loop() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Subsystem construction & registration
-// ═══════════════════════════════════════════════════════════════════════════
-
 static void subsystemInit() {
-    drivetrain = new Drivetrain();
-    intakes    = new Intakes();
-    lift       = new Lift();
-    solenoids  = new Solenoids();
-
-    drivetrain->registerThis();
-    intakes->registerThis();
+    drivetrain.registerThis();
+    intakes.registerThis();
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// GPS initial-pose acquisition (short poll — max ~2 s)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Attempt to read a usable initial pose from the GPS.
@@ -429,8 +315,6 @@ static void subsystemInit() {
  */
 static Eigen::Vector3f acquireInitialPose() {
     const float defaultImuHeadingRad = CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian);
-
-    // Fallback pose from config (inches → metres, compass-deg → internal-rad)
     Eigen::Vector3f configPose(
         CONFIG::START_POSE_X.convert(meter),
         CONFIG::START_POSE_Y.convert(meter),
@@ -441,11 +325,8 @@ static Eigen::Vector3f acquireInitialPose() {
         return configPose;
     }
 
-    // IMU heading is only relative until we explicitly seed it into the field frame.
-    // For GPSXY+IMU startup, use the configured IMU init heading as that field reference,
-    // then preserve any real rotation that happens during GPS lock acquisition.
-    if (CONFIG::STARTUP_POSE_MODE == CONFIG::StartupPoseMode::GPSXYPlusIMUHeading && drivetrain) {
-        drivetrain->resetHeading(defaultImuHeadingRad);
+    if (CONFIG::STARTUP_POSE_MODE == CONFIG::StartupPoseMode::GPSXYPlusIMUHeading) {
+        drivetrain.resetHeading(defaultImuHeadingRad);
         pros::delay(20);
     }
 
@@ -477,7 +358,6 @@ static Eigen::Vector3f acquireInitialPose() {
         const float x = reading->sensorFieldPos.x();
         const float y = reading->sensorFieldPos.y();
 
-        // Skip initial zeros (GPS hasn't booted yet)
         if (!hasLast && std::abs(x) < 0.001f && std::abs(y) < 0.001f) {
             pros::delay(pollDelayMs);
             continue;
@@ -506,7 +386,6 @@ static Eigen::Vector3f acquireInitialPose() {
         hasLast = true;
         lastReading = reading;
 
-        // Update loading screen inline
         float progress = 0.3f + 0.5f * (static_cast<float>(i) / maxPolls);
         char buf[40];
         std::snprintf(buf, sizeof(buf), "GPS: poll %d/%d", i + 1, maxPolls);
@@ -526,15 +405,14 @@ static Eigen::Vector3f acquireInitialPose() {
         return configPose;
     }
 
-    auto centerFromGps = [&](float headingRad) -> std::optional<Eigen::Vector2f> {
+    auto centerFromGps = [&lastReading](float headingRad) -> std::optional<Eigen::Vector2f> {
         return GpsLocalization::robotCenterFromSensorPose(
             lastReading->sensorFieldPos,
             headingRad,
             CONFIG::GPS_OFFSET);
     };
 
-    // Validate final pose is finite before returning
-    auto safeReturn = [&](const Eigen::Vector3f& pose) -> Eigen::Vector3f {
+    auto safeReturn = [&configPose](const Eigen::Vector3f& pose) -> Eigen::Vector3f {
         if (LocMath::isFinitePose(pose)) {
             std::printf("[INIT] startup pose: (%.3f, %.3f, %.1fdeg compass)\n",
                         pose.x(), pose.y(), headingToCompassDeg(pose.z()));
@@ -546,7 +424,7 @@ static Eigen::Vector3f acquireInitialPose() {
 
     switch (CONFIG::STARTUP_POSE_MODE) {
         case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading: {
-            const float imuHeadingRad = drivetrain ? drivetrain->getHeading() : configPose.z();
+            const float imuHeadingRad = drivetrain.getHeading();
             if (!LocMath::isFinite(imuHeadingRad)) {
                 std::printf("[INIT] IMU heading non-finite, using config\n");
                 return configPose;
@@ -574,10 +452,6 @@ static Eigen::Vector3f acquireInitialPose() {
             return configPose;
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Localization construction
-// ═══════════════════════════════════════════════════════════════════════════
 
 static void localizationInit() {
     std::vector<SensorModel*> sensors;
@@ -616,32 +490,23 @@ static void localizationInit() {
         if (CONFIG::MCL_ENABLE_BACK_DISTANCE_SENSOR)  sensors.push_back(&distBack);
     }
 
-    auto predictionFn = [&]() -> Eigen::Vector2f {
-        if (!drivetrain) {
-            return Eigen::Vector2f(0.0f, 0.0f);
-        }
-
-        Eigen::Vector2f proposal = drivetrain->consumePendingFwdOnlyDisplacement();
-        drivetrain->consumePendingDisplacement();
+    // Lambdas reference only file-static objects → empty capture list is correct.
+    auto predictionFn = []() -> Eigen::Vector2f {
+        Eigen::Vector2f proposal = drivetrain.consumePendingFwdOnlyDisplacement();
+        drivetrain.consumePendingDisplacement();
         return LocMath::isFiniteVec2(proposal) ? proposal : Eigen::Vector2f(0.0f, 0.0f);
     };
-    auto angleFn = [&]() -> QAngle {
-        if (!drivetrain) {
-            return QAngle(0.0f);
-        }
-
-        const float heading = drivetrain->getHeading();
+    auto angleFn = []() -> QAngle {
+        const float heading = drivetrain.getHeading();
         return QAngle(LocMath::isFinite(heading) ? heading : 0.0f);
     };
 
     Eigen::Vector3f startPose = acquireInitialPose();
-    drivetrain->syncLocalizationReference(startPose);
-    combinedCorrection = Eigen::Vector2f(0.0f, 0.0f);
+    drivetrain.syncLocalizationReference(startPose);
     combinedPose = startPose;
 
     renderInitStage(0.90f, "Init localization", "Starting filter...");
 
-    // === Localization Configuration Diagnostics ===
     std::printf("\n[LOC_CONFIG] ═════════════════════════════════════════════════\n");
     std::printf("[LOC_CONFIG] Canonical Internal Frame Convention:\n");
     std::printf("[LOC_CONFIG]   Position: metres\n");
@@ -679,29 +544,28 @@ static void localizationInit() {
         startPose,
         CONFIG::NUM_PARTICLES);
 
-    poseSource = [&]() -> Eigen::Vector3f {
+    fusion = new LocalizationFusion(drivetrain, particleFilter, sampleGpsPose);
+    fusion->reset(startPose);
+
+    poseSource = []() -> Eigen::Vector3f {
+        MutexGuard guard(locMutex);
         return LocMath::isFinitePose(combinedPose)
             ? combinedPose
-            : (drivetrain ? drivetrain->getOdomPose()
-                          : Eigen::Vector3f(0.0f, 0.0f, 0.0f));
+            : drivetrain.getOdomPose();
     };
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Build the auton command from the current selector state
-// ═══════════════════════════════════════════════════════════════════════════
 
 static void buildAutonCommand() {
     if (autonCommand && autonCommand->isScheduled()) {
         autonCommand->cancel();
     }
 
-    AutonBuildContext context;
-    context.drivetrain = drivetrain;
-    context.intakes = intakes;
-    context.lift = lift;
-    context.solenoids = solenoids;
-    context.poseSource = poseSource;
+    AutonBuildContext context{
+        drivetrain,
+        intakes,
+        lift,
+        poseSource,
+    };
 
     autonCommand = autonCommands::makeAutonCommand(
         AutonSelector::getAuton(),
@@ -722,46 +586,34 @@ static void launchSelectedAutonFromDriverControl() {
     scheduleSelectedAuton();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROS lifecycle entrypoints
-// ═══════════════════════════════════════════════════════════════════════════
-
 /**
  * Runs once when the program starts.
- * ALL screen rendering during init is done inline — no background tasks,
- * no mutexes, no atomics.  Tasks start only after init is fully complete.
+ * Initialization renders inline, then starts background tasks once ready.
  */
 void initialize() {
-    // 1. LCD on — show first frame
     firstInitScreenMs = 0;
     BrainScreen::initialize();
     renderInitStage(0.0f, "Boot", "Booting...");
     AutonSelector::selectAuton(DEFAULT_AUTON_SELECTION);
     AutonSelector::selectAlliance(DEFAULT_ALLIANCE_SELECTION);
 
-    // 2. Subsystems
     renderInitStage(0.10f, "Init subsystems", "Creating subsystem objects");
     subsystemInit();
     renderInitStage(0.18f, "Init subsystems", "Calibrating IMU");
-    if (drivetrain) {
-        drivetrain->calibrateImu();
-        drivetrain->resetHeading(CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian));
-    }
+    drivetrain.calibrateImu();
+    drivetrain.resetHeading(CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian));
     uiGps = std::make_unique<pros::Gps>(CONFIG::MCL_GPS_PORT);
     uiDistLeft = std::make_unique<pros::Distance>(CONFIG::MCL_LEFT_DISTANCE_PORT);
     uiDistRight = std::make_unique<pros::Distance>(CONFIG::MCL_RIGHT_DISTANCE_PORT);
     uiDistFront = std::make_unique<pros::Distance>(CONFIG::MCL_FRONT_DISTANCE_PORT);
     uiDistBack = std::make_unique<pros::Distance>(CONFIG::MCL_BACK_DISTANCE_PORT);
 
-    // 3. Localization (includes GPS poll with inline screen updates)
     renderInitStage(0.25f, "Init localization", "Preparing sensor models");
     localizationInit();
 
-    // 4. Auton command
     renderInitStage(0.95f, "Init auton", "Building auton command graph");
     buildAutonCommand();
 
-    // 5. Done — register selector buttons and rumble
     renderInitStage(1.0f, "Ready", "Controller rumble + start tasks");
 
     const uint32_t now = pros::millis();
@@ -780,7 +632,6 @@ void initialize() {
     pros::Controller master(pros::E_CONTROLLER_MASTER);
     master.rumble(".");
 
-    // 6. Now start background tasks
     pros::Task::create(screen_update_loop, "screen");
     pros::Task::create(update_loop, "scheduler");
 }
@@ -796,8 +647,6 @@ void autonomous() {
 }
 
 void opcontrol() {
-    // Opcontrol may re-enter after disable/enable cycles; reset scheduler
-    // state to avoid stale commands from the previous run.
     CommandScheduler::reset();
 
     if (autonCommand && autonCommand->isScheduled()) {
@@ -864,8 +713,6 @@ void opcontrol() {
                 break;
             case IntakeMode::ScoreLow:
                 intakeSpeed = -80;
-                selectMode = false;
-                upMode = false;
                 break;
             case IntakeMode::Off:
             default:
@@ -874,14 +721,12 @@ void opcontrol() {
         }
 
         if (intakeSpeed == 0) {
-            intakes->stop();
+            intakes.stop();
         } else {
-            intakes->spin(intakeSpeed);
+            intakes.spin(intakeSpeed);
         }
-        solenoids->select1State = selectMode;
-        solenoids->select2State = upMode;
-        solenoids->select1.set_value(selectMode);
-        solenoids->select2.set_value(upMode);
+        selector.set_value(selectMode);
+        top.set_value(upMode);
 
         if (downBHeld && !downBAutonLatch &&
             !pros::competition::is_connected()) {
@@ -894,22 +739,21 @@ void opcontrol() {
         float turn = static_cast<float>(
             master.get_analog(ANALOG_RIGHT_X));
 
-        if (drivetrain->getCurrentCommand() == nullptr) {
-            drivetrain->driverArcade(forward, turn);
+        if (drivetrain.getCurrentCommand() == nullptr) {
+            drivetrain.driverArcade(forward, turn);
         } else {
-            drivetrain->resetDriverAssistState();
+            drivetrain.resetDriverAssistState();
         }
-        if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
-                wingState = !wingState;
-            } 
-        if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_DOWN)) {
-                tongueState = !tongueState;
-            }
+        // Only toggle wing/tongue when NOT in the DOWN+B auton-launch combo
+        if (!downHeld && master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
+            wingState = !wingState;
+        }
+        if (!bHeld && master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+            tongueState = !tongueState;
+        }
         
-        solenoids->wingState = wingState;
-        solenoids->tongueState = tongueState;
-        solenoids->wing.set_value(wingState);
-        solenoids->tongue.set_value(tongueState);
+        wing.set_value(wingState);
+        tongue.set_value(tongueState);
 
         pros::delay(20);
     }
