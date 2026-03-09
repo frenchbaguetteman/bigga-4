@@ -1,12 +1,11 @@
 /**
  * @file intakes.h
- * Intake subsystem — linked motor pair, simple spin/stop interface.
+ * Intake subsystem — OkapiLib MotorGroup wrapper with spin/stop interface.
  */
 #pragma once
 
 #include "command/subsystem.h"
-#include "pros/motors.hpp"
-#include "pros/motor_group.hpp"
+#include "okapi/api.hpp"
 
 class Intakes : public Subsystem {
 public:
@@ -30,5 +29,5 @@ public:
     float getCurrent() const;
 
 private:
-    pros::MotorGroup m_motors;
+    okapi::MotorGroup m_motors;
 };

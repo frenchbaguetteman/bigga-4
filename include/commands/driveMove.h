@@ -1,12 +1,12 @@
 /**
  * @file driveMove.h
- * Simple PID drive-to-point command.
+ * PID drive-to-point command using OkapiLib PID controllers.
  */
 #pragma once
 
 #include "command/command.h"
 #include "subsystems/drivetrain.h"
-#include "feedback/pid.h"
+#include "okapi/impl/control/iterative/iterativeControllerFactory.hpp"
 #include "config.h"
 #include "utils/utils.h"
 #include "Eigen/Core"
@@ -40,8 +40,10 @@ public:
         , m_headingTarget(0.0f)
         , m_driveSign(1)
         , m_maxOutput(std::fabs(maxOutput))
-        , m_distPid(CONFIG::DISTANCE_PID, tolerance)
-        , m_turnPid(CONFIG::TURN_PID, 0.05f) {}
+        , m_distPid(okapi::IterativeControllerFactory::posPID(
+              CONFIG::DISTANCE_PID.kP, CONFIG::DISTANCE_PID.kI, CONFIG::DISTANCE_PID.kD))
+        , m_turnPid(okapi::IterativeControllerFactory::posPID(
+              CONFIG::TURN_PID.kP, CONFIG::TURN_PID.kI, CONFIG::TURN_PID.kD)) {}
 
     DriveMoveCommand(Drivetrain* drivetrain,
                      Eigen::Vector2f target,
@@ -59,12 +61,16 @@ public:
         , m_headingTarget(headingTarget)
         , m_driveSign(driveSign >= 0 ? 1 : -1)
         , m_maxOutput(std::fabs(maxOutput))
-        , m_distPid(CONFIG::DISTANCE_PID, tolerance)
-        , m_turnPid(CONFIG::TURN_PID, 0.05f) {}
+        , m_distPid(okapi::IterativeControllerFactory::posPID(
+              CONFIG::DISTANCE_PID.kP, CONFIG::DISTANCE_PID.kI, CONFIG::DISTANCE_PID.kD))
+        , m_turnPid(okapi::IterativeControllerFactory::posPID(
+              CONFIG::TURN_PID.kP, CONFIG::TURN_PID.kI, CONFIG::TURN_PID.kD)) {}
 
     void initialize() override {
         m_distPid.reset();
         m_turnPid.reset();
+        m_distPid.setTarget(0.0);
+        m_turnPid.setTarget(0.0);
     }
 
     void execute() override {
@@ -86,14 +92,15 @@ public:
             driveError = dist * static_cast<float>(m_driveSign);
         }
 
-        float driveOut = m_distPid.calculate(0.0f, driveError);
-        float turnOut  = m_turnPid.calculate(
-            0.0f,
-            utils::angleDifference(targetAngle, pose.z()));
+        // OkapiLib PID: target is 0, pass -error as reading so output drives toward 0
+        double driveOut = m_distPid.step(static_cast<double>(-driveError));
+        double turnOut  = m_turnPid.step(
+            static_cast<double>(-utils::angleDifference(targetAngle, pose.z())));
 
+        // OkapiLib PID outputs [-1, 1], scale to [-maxOutput, maxOutput]
         m_drivetrain->arcade(
-            utils::clamp(driveOut, -m_maxOutput, m_maxOutput),
-            utils::clamp(turnOut, -m_maxOutput, m_maxOutput));
+            utils::clamp(static_cast<float>(driveOut * m_maxOutput), -m_maxOutput, m_maxOutput),
+            utils::clamp(static_cast<float>(turnOut * m_maxOutput), -m_maxOutput, m_maxOutput));
     }
 
     void end(bool /*interrupted*/) override {
@@ -101,7 +108,9 @@ public:
     }
 
     bool isFinished() override {
-        return m_distPid.atSetpoint() && m_turnPid.atSetpoint();
+        Eigen::Vector3f pose = m_poseSource();
+        const Eigen::Vector2f error(m_target.x() - pose.x(), m_target.y() - pose.y());
+        return error.norm() < m_tolerance;
     }
 
     std::vector<Subsystem*> getRequirements() override {
@@ -117,6 +126,6 @@ private:
     float m_headingTarget;
     int m_driveSign;
     float m_maxOutput;
-    PID m_distPid;
-    PID m_turnPid;
+    okapi::IterativePosPIDController m_distPid;
+    okapi::IterativePosPIDController m_turnPid;
 };

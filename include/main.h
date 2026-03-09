@@ -11,6 +11,7 @@
 #define PROS_USE_LITERALS
 
 #include "api.h"
+#include "okapi/api.hpp"
 
 #include "Eigen/Dense"
 #include "units/units.hpp"
