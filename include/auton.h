@@ -12,7 +12,7 @@
 // ── Active auton (change per-slot or via uploadAllAutons.py) ────────────────
 
 #ifndef SELECTED_AUTON
-#define SELECTED_AUTON Auton::NEGATIVE_1
+#define SELECTED_AUTON Auton::EXAMPLE_TURN
 #endif
 
 #ifndef DEFAULT_ALLIANCE

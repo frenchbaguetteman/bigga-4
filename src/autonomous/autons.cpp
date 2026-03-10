@@ -1,14 +1,14 @@
 #include "autonomous/autons.h"
 
-#include "autonomous/chassis.h"
-#include "command/command.h"
-#include "commands/ltvUnicycleController.h"
-#include "commands/ramsete.h"
-#include "motionProfiling/profileBuilder.h"
+#include "tuning/relayPidAutotuner.h"
+#include "EZ-Template/drive/drive.hpp"
+#include "EZ-Template/tracking_wheel.hpp"
+#include "Eigen/Core"
+#include "config.h"
 #include "pros/rtos.hpp"
+#include "subsystems/drivetrain.h"
 #include "subsystems/intakes.h"
 #include "subsystems/lift.h"
-#include "tuning/relayPidAutotuner.h"
 
 #include <algorithm>
 #include <array>
@@ -17,12 +17,20 @@
 #include <cstdio>
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace {
 
 constexpr float kInToM = 0.0254f;
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
+constexpr double kDriveWheelDiameter_in = CONFIG::DRIVE_RADIUS_in * 2.0;
+constexpr double kDriveCartridgeRpm = 600.0;
+constexpr double kTrackingWheelDiameter_in = 2.0;
+constexpr int kDriveSpeed = 110;
+constexpr int kTurnSpeed = 90;
+constexpr int kSwingSpeed = 110;
+constexpr int kCalibrationTurnSpeed = 70;
 
 struct RuntimeState {
     Drivetrain* drivetrain = nullptr;
@@ -30,11 +38,13 @@ struct RuntimeState {
     Lift* lift = nullptr;
     std::function<Eigen::Vector3f()> poseSource;
     std::function<bool()> isCancelled;
-    std::unique_ptr<Chassis> chassis;
     const AutonEntry* currentEntry = nullptr;
 };
 
 RuntimeState g_runtime;
+std::unique_ptr<ez::Drive> g_ezDrive;
+std::unique_ptr<ez::tracking_wheel> g_horizontalTracker;
+bool g_ezMotionReady = false;
 
 void autonLog(const char* fmt, ...) {
     char message[192];
@@ -51,8 +61,7 @@ void autonLog(const char* fmt, ...) {
 bool runtimeReady() {
     return g_runtime.drivetrain != nullptr &&
            g_runtime.intakes != nullptr &&
-           g_runtime.lift != nullptr &&
-           g_runtime.chassis != nullptr;
+           g_runtime.lift != nullptr;
 }
 
 Drivetrain& drivetrain() {
@@ -65,10 +74,6 @@ Intakes& intakes() {
 
 Lift& lift() {
     return *g_runtime.lift;
-}
-
-Chassis& chassis() {
-    return *g_runtime.chassis;
 }
 
 Eigen::Vector3f currentPose() {
@@ -85,10 +90,6 @@ bool routineCancelled() {
     return g_runtime.isCancelled && g_runtime.isCancelled();
 }
 
-ez::pose fieldPoseInches(double xInches, double yInches) {
-    return ez::pose{xInches, yInches};
-}
-
 float metersToInches(float meters) {
     return meters / kInToM;
 }
@@ -97,28 +98,120 @@ float radiansToDegrees(float radians) {
     return radians * 180.0f / kPi;
 }
 
-bool runInlineCommand(Command& command, int pollMs = 10) {
-    command.initialize();
+std::vector<int> asPortVector(const std::array<std::int8_t, 3>& ports) {
+    return {ports[0], ports[1], ports[2]};
+}
 
-    bool interrupted = false;
-    while (!command.isFinished()) {
-        if (routineCancelled()) {
-            interrupted = true;
-            break;
-        }
+void configureEzDrive(ez::Drive& drive) {
+    drive.pid_print_toggle(false);
+    drive.opcontrol_curve_buttons_toggle(false);
+    drive.drive_width_set(CONFIG::TRACK_WIDTH_in * okapi::inch);
 
-        command.execute();
-        if (!command.isFinished()) {
-            pros::delay(pollMs);
-        }
+    drive.pid_drive_constants_set(20.0, 0.0, 100.0);
+    drive.pid_heading_constants_set(11.0, 0.0, 20.0);
+    drive.pid_turn_constants_set(3.0, 0.05, 20.0, 15.0);
+    drive.pid_swing_constants_set(6.0, 0.0, 65.0);
+    drive.pid_odom_angular_constants_set(6.5, 0.0, 52.5);
+    drive.pid_odom_boomerang_constants_set(5.8, 0.0, 32.5);
+
+    drive.pid_turn_exit_condition_set(
+        90 * okapi::millisecond, 3 * okapi::degree,
+        250 * okapi::millisecond, 7 * okapi::degree,
+        500 * okapi::millisecond, 500 * okapi::millisecond);
+    drive.pid_swing_exit_condition_set(
+        90 * okapi::millisecond, 3 * okapi::degree,
+        250 * okapi::millisecond, 7 * okapi::degree,
+        500 * okapi::millisecond, 500 * okapi::millisecond);
+    drive.pid_drive_exit_condition_set(
+        90 * okapi::millisecond, 1 * okapi::inch,
+        250 * okapi::millisecond, 3 * okapi::inch,
+        500 * okapi::millisecond, 500 * okapi::millisecond);
+    drive.pid_odom_turn_exit_condition_set(
+        90 * okapi::millisecond, 3 * okapi::degree,
+        250 * okapi::millisecond, 7 * okapi::degree,
+        500 * okapi::millisecond, 750 * okapi::millisecond);
+    drive.pid_odom_drive_exit_condition_set(
+        90 * okapi::millisecond, 1 * okapi::inch,
+        250 * okapi::millisecond, 3 * okapi::inch,
+        500 * okapi::millisecond, 750 * okapi::millisecond);
+
+    drive.pid_turn_chain_constant_set(3 * okapi::degree);
+    drive.pid_swing_chain_constant_set(5 * okapi::degree);
+    drive.pid_drive_chain_constant_set(3 * okapi::inch);
+
+    drive.slew_turn_constants_set(3 * okapi::degree, 70);
+    drive.slew_drive_constants_set(3 * okapi::inch, 70);
+    drive.slew_swing_constants_set(3 * okapi::inch, 80);
+
+    drive.odom_turn_bias_set(0.9);
+    drive.odom_look_ahead_set(7 * okapi::inch);
+    drive.odom_boomerang_distance_set(16 * okapi::inch);
+    drive.odom_boomerang_dlead_set(0.625);
+    drive.pid_angle_behavior_set(ez::shortest);
+    drive.drive_brake_set(pros::E_MOTOR_BRAKE_HOLD);
+}
+
+bool attachEzTrackers(ez::Drive& drive) {
+    if (CONFIG::HORIZONTAL_TRACKING_PORT == 0) {
+        return false;
     }
 
-    if (!interrupted && routineCancelled()) {
-        interrupted = true;
-    }
+    const int trackerPort = CONFIG::HORIZONTAL_TRACKING_REVERSED
+        ? -CONFIG::HORIZONTAL_TRACKING_PORT
+        : CONFIG::HORIZONTAL_TRACKING_PORT;
+    g_horizontalTracker = std::make_unique<ez::tracking_wheel>(
+        trackerPort,
+        kTrackingWheelDiameter_in,
+        std::fabs(CONFIG::LATERAL_WHEEL_OFFSET_in));
 
-    command.end(interrupted);
-    return !interrupted;
+    if (CONFIG::LATERAL_WHEEL_OFFSET_in <= 0.0f) {
+        drive.odom_tracker_back_set(g_horizontalTracker.get());
+    } else {
+        drive.odom_tracker_front_set(g_horizontalTracker.get());
+    }
+    return true;
+}
+
+bool ezDriveReady() {
+    return g_ezDrive != nullptr && g_ezMotionReady;
+}
+
+ez::Drive& ezDrive() {
+    return *g_ezDrive;
+}
+
+void stopEzMotion() {
+    if (!ezDriveReady()) {
+        return;
+    }
+    ezDrive().drive_mode_set(ez::DISABLE, true);
+    ezDrive().pid_targets_reset();
+    ezDrive().drive_set(0, 0);
+}
+
+void prepareEzStart() {
+    stopEzMotion();
+    ezDrive().drive_sensor_reset();
+    ezDrive().odom_xyt_set(0 * okapi::inch, 0 * okapi::inch, 0 * okapi::degree);
+    ezDrive().drive_brake_set(pros::E_MOTOR_BRAKE_HOLD);
+}
+
+ez::united_pose ezLocalPose(double forwardIn,
+                            double leftIn,
+                            okapi::QAngle theta = ez::p_ANGLE_NOT_SET) {
+    return {
+        -leftIn * okapi::inch,
+        forwardIn * okapi::inch,
+        theta,
+    };
+}
+
+ez::united_odom ezLocalMove(double forwardIn,
+                            double leftIn,
+                            ez::drive_directions dir,
+                            int speed,
+                            okapi::QAngle theta = ez::p_ANGLE_NOT_SET) {
+    return {ezLocalPose(forwardIn, leftIn, theta), dir, speed};
 }
 
 bool cancellableDelay(int milliseconds) {
@@ -185,7 +278,7 @@ void runRelayPidTune(const char* configLabel,
                      const tuning::RelayPidAutotuner::Config& config) {
     tuning::RelayPidAutotuner::clearStatus();
 
-    chassis().cancel_motion();
+    stopEzMotion();
     drivetrain().stop();
     pros::delay(250);
 
@@ -209,115 +302,101 @@ void runRelayPidTune(const char* configLabel,
     printTuneResult(configLabel, config.mode, result);
 }
 
-void runNegative1();
-void runPositive1();
-void runTuneDrivePid();
-void runTuneTurnPid();
-void runExampleMove();
-void runExampleTurn();
-void runExamplePath();
-void runExampleLtv();
-void runSkills();
-
 void runNegative1() {
     autonLog("Negative 1 start");
+    prepareEzStart();
+
     intakes().spin(127);
-    autonLog("Negative 1 path -> center");
-    chassis().pid_odom_set({
-        {{-47.24, -23.62}, ez::fwd, 102},
-        {{-23.62, -23.62}, ez::fwd, 102},
-        {{0.0, -11.81}, ez::fwd, 102},
+    autonLog("Negative 1 pure pursuit -> goal");
+    ezDrive().pid_odom_set(std::vector<ez::united_odom>{
+        ezLocalMove(23.62, 0.0, ez::fwd, 102),
+        ezLocalMove(47.24, 11.81, ez::fwd, 102),
     }, true);
-    chassis().pid_wait();
+    ezDrive().pid_wait();
     if (routineCancelled()) {
         intakes().stop();
         autonLog("Negative 1 cancelled after path");
         return;
     }
 
-    if (!cancellableDelay(300)) {
+    if (!cancellableDelay(250)) {
         intakes().stop();
-        autonLog("Negative 1 cancelled during settle delay");
+        autonLog("Negative 1 cancelled during settle");
         return;
     }
-    if (!intakeTimed(-127, 500)) {
+    if (!intakeTimed(-127, 450)) {
         autonLog("Negative 1 cancelled during outtake");
         return;
     }
 
-    autonLog("Negative 1 turn -> 180");
-    chassis().pid_turn_set(180.0, 96);
-    chassis().pid_wait();
-    if (routineCancelled()) {
-        autonLog("Negative 1 cancelled after turn");
-        return;
-    }
-
-    autonLog("Negative 1 return -> corner");
-    chassis().pid_odom_set(fieldPoseInches(-47.24, -23.62), ez::fwd, 96);
-    chassis().pid_wait();
+    intakes().spin(127);
+    autonLog("Negative 1 boomerang -> home");
+    ezDrive().pid_odom_set(
+        ezLocalMove(0.0, 0.0, ez::rev, 96, 0 * okapi::degree),
+        true);
+    ezDrive().pid_wait();
 }
 
 void runPositive1() {
     autonLog("Positive 1 start");
+    prepareEzStart();
+
     intakes().spin(127);
-    autonLog("Positive 1 path -> center");
-    chassis().pid_odom_set({
-        {{47.24, -23.62}, ez::fwd, 102},
-        {{23.62, -23.62}, ez::fwd, 102},
-        {{0.0, -11.81}, ez::fwd, 102},
+    autonLog("Positive 1 pure pursuit -> goal");
+    ezDrive().pid_odom_set(std::vector<ez::united_odom>{
+        ezLocalMove(23.62, 0.0, ez::fwd, 102),
+        ezLocalMove(47.24, -11.81, ez::fwd, 102),
     }, true);
-    chassis().pid_wait();
+    ezDrive().pid_wait();
     if (routineCancelled()) {
         intakes().stop();
         autonLog("Positive 1 cancelled after path");
         return;
     }
 
-    if (!cancellableDelay(300)) {
+    if (!cancellableDelay(250)) {
         intakes().stop();
-        autonLog("Positive 1 cancelled during settle delay");
+        autonLog("Positive 1 cancelled during settle");
         return;
     }
-    if (!intakeTimed(-127, 500)) {
+    if (!intakeTimed(-127, 450)) {
         autonLog("Positive 1 cancelled during outtake");
         return;
     }
 
-    autonLog("Positive 1 turn -> 0");
-    chassis().pid_turn_set(0.0, 96);
-    chassis().pid_wait();
-    if (routineCancelled()) {
-        autonLog("Positive 1 cancelled after turn");
-        return;
-    }
-
-    autonLog("Positive 1 return -> corner");
-    chassis().pid_odom_set(fieldPoseInches(47.24, -23.62), ez::fwd, 96);
-    chassis().pid_wait();
+    intakes().spin(127);
+    autonLog("Positive 1 boomerang -> home");
+    ezDrive().pid_odom_set(
+        ezLocalMove(0.0, 0.0, ez::rev, 96, 0 * okapi::degree),
+        true);
+    ezDrive().pid_wait();
 }
 
 void runSkills() {
     autonLog("Skills start");
-    intakes().spin(127);
+    prepareEzStart();
 
-    chassis().pid_odom_set(fieldPoseInches(-11.81, -55.12), ez::fwd, 127);
-    chassis().pid_wait();
+    intakes().spin(127);
+    ezDrive().pid_odom_set(ezLocalMove(55.12, 0.0, ez::fwd, 110), true);
+    ezDrive().pid_wait();
     if (!intakeTimed(-127, 400)) {
         autonLog("Skills cancelled on first score");
         return;
     }
 
     intakes().spin(127);
-    chassis().pid_odom_set(fieldPoseInches(-11.81, 0.0), ez::fwd, 110);
-    chassis().pid_wait();
+    ezDrive().pid_swing_set(ez::LEFT_SWING, 35 * okapi::degree, 90, 35);
+    ezDrive().pid_wait();
     if (routineCancelled()) {
-        intakes().stop();
-        autonLog("Skills cancelled after first traverse");
+        autonLog("Skills cancelled after swing");
         return;
     }
-    chassis().pid_odom_set(fieldPoseInches(11.81, 0.0), ez::fwd, 96);
-    chassis().pid_wait();
+
+    ezDrive().pid_odom_set(std::vector<ez::united_odom>{
+        ezLocalMove(36.0, -18.0, ez::fwd, 100),
+        ezLocalMove(56.0, -18.0, ez::fwd, 100),
+    }, true);
+    ezDrive().pid_wait();
     if (!intakeTimed(-127, 400)) {
         autonLog("Skills cancelled on second score");
         return;
@@ -330,21 +409,11 @@ void runSkills() {
         return;
     }
     lift().moveTo(0.0f);
-    if (routineCancelled()) {
-        lift().stop();
-        autonLog("Skills cancelled after lift");
-        return;
-    }
 
-    chassis().pid_odom_set(fieldPoseInches(47.24, 39.37), ez::fwd, 110);
-    chassis().pid_wait();
-    if (!intakeTimed(-127, 500)) {
-        autonLog("Skills cancelled on third score");
-        return;
-    }
-
-    chassis().pid_odom_set(fieldPoseInches(0.0, 0.0), ez::fwd, 96);
-    chassis().pid_wait();
+    ezDrive().pid_odom_set(
+        ezLocalMove(0.0, 0.0, ez::rev, 100, 0 * okapi::degree),
+        true);
+    ezDrive().pid_wait();
 }
 
 void runTuneDrivePid() {
@@ -354,6 +423,7 @@ void runTuneDrivePid() {
     config.target = CONFIG::PID_AUTOTUNE_DRIVE_TARGET_in * kInToM;
     config.relayAmplitude = CONFIG::PID_AUTOTUNE_DRIVE_RELAY;
     config.noiseBand = CONFIG::PID_AUTOTUNE_DRIVE_NOISE_in * kInToM;
+    config.controllerPeriodMs = 10;
     config.timeoutMs = CONFIG::PID_AUTOTUNE_TIMEOUT_ms;
     config.requiredPeakPairs = CONFIG::PID_AUTOTUNE_REQUIRED_PEAK_PAIRS;
     config.analysisPeakPairs = CONFIG::PID_AUTOTUNE_ANALYSIS_PEAK_PAIRS;
@@ -369,6 +439,7 @@ void runTuneTurnPid() {
     config.target = CONFIG::PID_AUTOTUNE_TURN_TARGET_deg * kDegToRad;
     config.relayAmplitude = CONFIG::PID_AUTOTUNE_TURN_RELAY;
     config.noiseBand = CONFIG::PID_AUTOTUNE_TURN_NOISE_deg * kDegToRad;
+    config.controllerPeriodMs = 10;
     config.timeoutMs = CONFIG::PID_AUTOTUNE_TIMEOUT_ms;
     config.requiredPeakPairs = CONFIG::PID_AUTOTUNE_REQUIRED_PEAK_PAIRS;
     config.analysisPeakPairs = CONFIG::PID_AUTOTUNE_ANALYSIS_PEAK_PAIRS;
@@ -378,125 +449,91 @@ void runTuneTurnPid() {
 }
 
 void runExampleMove() {
-    autonLog("Example Move start");
-    chassis().set_local_frame();
+    autonLog("Example Drive start");
+    prepareEzStart();
 
-    autonLog("Example Move drive -> 24in");
-    chassis().pid_drive_set(24.0, 110);
-    chassis().pid_wait();
+    ezDrive().pid_drive_set(24 * okapi::inch, kDriveSpeed, true);
+    ezDrive().pid_wait();
     if (routineCancelled()) {
-        autonLog("Example Move cancelled after drive");
+        autonLog("Example Drive cancelled after first leg");
         return;
     }
 
-    autonLog("Example Move point -> (24,18)");
-    chassis().pid_odom_set({24.0, 18.0}, ez::fwd, 110);
-    chassis().pid_wait();
+    ezDrive().pid_drive_set(-12 * okapi::inch, kDriveSpeed);
+    ezDrive().pid_wait();
+}
+
+void runExampleSwing() {
+    autonLog("Example Swing start");
+    prepareEzStart();
+
+    ezDrive().pid_swing_set(ez::LEFT_SWING, 45 * okapi::degree, kSwingSpeed, 45);
+    ezDrive().pid_wait();
     if (routineCancelled()) {
-        autonLog("Example Move cancelled after point");
+        autonLog("Example Swing cancelled after first arc");
         return;
     }
 
-    autonLog("Example Move point -> home");
-    chassis().pid_odom_set({0.0, 0.0}, ez::fwd, 110);
-    chassis().pid_wait();
+    ezDrive().pid_swing_set(ez::RIGHT_SWING, 0 * okapi::degree, kSwingSpeed, 45);
+    ezDrive().pid_wait();
 }
 
 void runExampleTurn() {
-    autonLog("Example Turn start");
+    autonLog("PID Calibration start");
+    prepareEzStart();
 
-    autonLog("Example Turn -> 90");
-    chassis().pid_turn_set(90.0, 90);
-    chassis().pid_wait();
+    ezDrive().pid_turn_set(90 * okapi::degree, kCalibrationTurnSpeed);
+    ezDrive().pid_wait();
     if (routineCancelled()) {
-        autonLog("Example Turn cancelled at 90");
+        autonLog("PID Calibration cancelled at 90");
         return;
     }
 
-    autonLog("Example Turn -> -90");
-    chassis().pid_turn_set(-90.0, 90);
-    chassis().pid_wait();
-    if (routineCancelled()) {
-        autonLog("Example Turn cancelled at -90");
+    if (!cancellableDelay(250)) {
+        autonLog("PID Calibration cancelled during settle");
         return;
     }
 
-    autonLog("Example Turn -> 180");
-    chassis().pid_turn_set(180.0, 90);
-    chassis().pid_wait();
-    if (routineCancelled()) {
-        autonLog("Example Turn cancelled at 180");
-        return;
-    }
-
-    autonLog("Example Turn -> 0");
-    chassis().pid_turn_set(0.0, 90);
-    chassis().pid_wait();
-}
-
-MotionProfile buildExampleProfile(const Chassis& activeChassis) {
-    return buildProfile({
-        activeChassis.pose_to_global(
-            Eigen::Vector3f(0.0f, 0.0f, 0.0f),
-            Chassis::CoordinateFrame::Local),
-        activeChassis.pose_to_global(
-            Eigen::Vector3f(18.0f * kInToM, 10.0f * kInToM, 0.35f),
-            Chassis::CoordinateFrame::Local),
-        activeChassis.pose_to_global(
-            Eigen::Vector3f(36.0f * kInToM, -8.0f * kInToM, -0.25f),
-            Chassis::CoordinateFrame::Local),
-        activeChassis.pose_to_global(
-            Eigen::Vector3f(48.0f * kInToM, 0.0f, 0.0f),
-            Chassis::CoordinateFrame::Local),
-    }, 1.0f, 1.8f);
+    ezDrive().pid_turn_set(0 * okapi::degree, kCalibrationTurnSpeed);
+    ezDrive().pid_wait();
 }
 
 void runExamplePath() {
-    autonLog("Example Path start");
-    chassis().set_local_frame();
-    RamseteCommand command(
-        &drivetrain(),
-        buildExampleProfile(chassis()),
-        []() {
-            return currentPose();
-        });
+    autonLog("Example Pure Pursuit start");
+    prepareEzStart();
 
-    intakes().spin(96);
-    if (!runInlineCommand(command)) {
-        intakes().stop();
-        autonLog("Example Path cancelled during ramsete");
+    ezDrive().pid_odom_set(std::vector<ez::united_odom>{
+        {{6 * okapi::inch, 10 * okapi::inch}, ez::fwd, kDriveSpeed},
+        {{0 * okapi::inch, 20 * okapi::inch}, ez::fwd, kDriveSpeed},
+        {{0 * okapi::inch, 30 * okapi::inch}, ez::fwd, kDriveSpeed},
+    }, true);
+    ezDrive().pid_wait();
+    if (routineCancelled()) {
+        autonLog("Example Pure Pursuit cancelled on outbound");
         return;
     }
-    if (!intakeTimed(-127, 300)) {
-        autonLog("Example Path cancelled during outtake");
-        return;
-    }
-    chassis().pid_odom_set({0.0, 0.0}, ez::fwd, 96);
-    chassis().pid_wait();
+
+    ezDrive().pid_odom_set({{0 * okapi::inch, 0 * okapi::inch}, ez::rev, kDriveSpeed}, true);
+    ezDrive().pid_wait();
 }
 
 void runExampleLtv() {
-    autonLog("Example LTV start");
-    chassis().set_local_frame();
-    LtvUnicycleCommand command(
-        &drivetrain(),
-        buildExampleProfile(chassis()),
-        []() {
-            return currentPose();
-        });
+    autonLog("Example Boomerang start");
+    prepareEzStart();
 
-    intakes().spin(96);
-    if (!runInlineCommand(command)) {
-        intakes().stop();
-        autonLog("Example LTV cancelled during track");
+    ezDrive().pid_odom_set(
+        {{0 * okapi::inch, 24 * okapi::inch, 45 * okapi::degree}, ez::fwd, kDriveSpeed},
+        true);
+    ezDrive().pid_wait();
+    if (routineCancelled()) {
+        autonLog("Example Boomerang cancelled on outbound");
         return;
     }
-    if (!intakeTimed(-127, 300)) {
-        autonLog("Example LTV cancelled during outtake");
-        return;
-    }
-    chassis().pid_odom_set({0.0, 0.0}, ez::fwd, 96);
-    chassis().pid_wait();
+
+    ezDrive().pid_odom_set(
+        {{0 * okapi::inch, 0 * okapi::inch, 0 * okapi::degree}, ez::rev, kDriveSpeed},
+        true);
+    ezDrive().pid_wait();
 }
 
 const AutonList kAvailableAutons = {{
@@ -504,15 +541,49 @@ const AutonList kAvailableAutons = {{
     {Auton::POSITIVE_1, "Positive 1", &runPositive1},
     {Auton::TUNE_DRIVE_PID, "Tune Drive PID", &runTuneDrivePid},
     {Auton::TUNE_TURN_PID, "Tune Turn PID", &runTuneTurnPid},
-    {Auton::EXAMPLE_MOVE, "Example Move", &runExampleMove},
-    {Auton::EXAMPLE_TURN, "Example Turn", &runExampleTurn},
-    {Auton::EXAMPLE_PATH, "Example Path", &runExamplePath},
-    {Auton::EXAMPLE_LTV, "Example LTV", &runExampleLtv},
+    {Auton::EXAMPLE_MOVE, "Example Drive", &runExampleMove},
+    {Auton::EXAMPLE_SWING, "Example Swing", &runExampleSwing},
+    {Auton::EXAMPLE_TURN, "PID Calibration", &runExampleTurn},
+    {Auton::EXAMPLE_PATH, "Example Pure Pursuit", &runExamplePath},
+    {Auton::EXAMPLE_LTV, "Example Boomerang", &runExampleLtv},
     {Auton::SKILLS, "Skills", &runSkills},
     {Auton::NONE, "None", nullptr},
 }};
 
 } // namespace
+
+bool initializeAutonMotion() {
+    if (g_ezDrive) {
+        return g_ezMotionReady;
+    }
+
+    autonLog("EZ motion init begin");
+    g_ezDrive = std::make_unique<ez::Drive>(
+        asPortVector(CONFIG::LEFT_DRIVE_PORTS),
+        asPortVector(CONFIG::RIGHT_DRIVE_PORTS),
+        CONFIG::IMU_PORT,
+        kDriveWheelDiameter_in,
+        kDriveCartridgeRpm);
+
+    configureEzDrive(*g_ezDrive);
+    const bool usingHorizontalTracker = attachEzTrackers(*g_ezDrive);
+    g_ezMotionReady = g_ezDrive->drive_imu_calibrate(false);
+
+    if (!g_ezMotionReady) {
+        autonLog("EZ motion init failed");
+        return false;
+    }
+
+    g_ezDrive->drive_sensor_reset();
+    g_ezDrive->odom_xyt_set(0 * okapi::inch, 0 * okapi::inch, 0 * okapi::degree);
+    g_ezDrive->drive_mode_set(ez::DISABLE, true);
+
+    autonLog("EZ motion ready tracker=%s track=%.2f wheel=%.2f",
+             usingHorizontalTracker ? "horizontal" : "integrated",
+             CONFIG::TRACK_WIDTH_in,
+             kDriveWheelDiameter_in);
+    return true;
+}
 
 const AutonList& availableAutons() {
     return kAvailableAutons;
@@ -552,23 +623,17 @@ void bindAutonRuntime(Drivetrain& drivetrainRef,
     g_runtime.lift = &liftRef;
     g_runtime.poseSource = std::move(poseSource);
     g_runtime.isCancelled = std::move(isCancelled);
-    g_runtime.chassis =
-        std::make_unique<Chassis>(&drivetrainRef, g_runtime.poseSource, g_runtime.isCancelled);
-    g_runtime.chassis->pid_targets_reset();
-    g_runtime.chassis->set_local_origin_here();
-    g_runtime.chassis->set_global_frame();
 
     const Eigen::Vector3f pose = currentPose();
-    autonLog("runtime bound pose=(%.2f, %.2f, %.1fdeg)",
+    autonLog("runtime bound pose=(%.2f, %.2f, %.1fdeg) ez=%s",
              metersToInches(pose.x()),
              metersToInches(pose.y()),
-             radiansToDegrees(pose.z()));
+             radiansToDegrees(pose.z()),
+             ezDriveReady() ? "ready" : "not-ready");
 }
 
 void resetAutonRuntime() {
-    if (g_runtime.chassis) {
-        g_runtime.chassis->cancel_motion();
-    }
+    stopEzMotion();
     if (g_runtime.intakes) {
         g_runtime.intakes->stop();
     }
@@ -592,6 +657,15 @@ bool runAuton(const AutonEntry& entry) {
         return false;
     }
 
+    const bool needsEzMotion =
+        entry.id != Auton::TUNE_DRIVE_PID &&
+        entry.id != Auton::TUNE_TURN_PID &&
+        entry.id != Auton::NONE;
+    if (needsEzMotion && !ezDriveReady()) {
+        autonLog("run rejected: EZ motion not ready");
+        return false;
+    }
+
     g_runtime.currentEntry = &entry;
     const Eigen::Vector3f startPose = currentPose();
     autonLog("start %s pose=(%.2f, %.2f, %.1fdeg)",
@@ -604,7 +678,7 @@ bool runAuton(const AutonEntry& entry) {
 
     intakes().stop();
     lift().stop();
-    chassis().cancel_motion();
+    stopEzMotion();
     drivetrain().stop();
 
     const bool wasCancelled = routineCancelled();

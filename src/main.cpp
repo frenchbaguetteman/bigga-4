@@ -396,30 +396,33 @@ void update_loop() {
             }
         }
 
-        const uint32_t now = pros::millis();
-        if ((controllerUpdate.rejectedSnap ||
-             controllerUpdate.acceptedStableJump ||
-             controllerUpdate.decayingToOdom ||
-             controllerUpdate.usedOdomFallback) &&
-            now - lastGuardLogMs >= 250) {
-            lastGuardLogMs = now;
-            std::printf(
-                "[LOC_GUARD] fused_ok=%c snap_reject=%c stable_accept=%c stable_cycles=%d "
-                "decay=%c odom_fallback=%c target=(%.3f,%.3f)|%.3f applied=(%.3f,%.3f)|%.3f\n",
-                LocMath::isFinitePose(fusedPose) ? 'Y' : 'N',
-                controllerUpdate.rejectedSnap ? 'Y' : 'N',
-                controllerUpdate.acceptedStableJump ? 'Y' : 'N',
-                controllerUpdate.stableJumpCycles,
-                controllerUpdate.decayingToOdom ? 'Y' : 'N',
-                controllerUpdate.usedOdomFallback ? 'Y' : 'N',
-                controllerUpdate.targetCorrection.x(),
-                controllerUpdate.targetCorrection.y(),
-                controllerUpdate.targetCorrection.norm(),
-                controllerUpdate.correction.x(),
-                controllerUpdate.correction.y(),
-                controllerUpdate.correction.norm());
+        if constexpr (CONFIG::ODOM_DEBUG_ENABLE) {
+            const uint32_t now = pros::millis();
+            if ((controllerUpdate.rejectedSnap ||
+                 controllerUpdate.acceptedStableJump ||
+                 controllerUpdate.decayingToOdom ||
+                 controllerUpdate.usedOdomFallback) &&
+                now - lastGuardLogMs >= 250) {
+                lastGuardLogMs = now;
+                std::printf(
+                    "[LOC_GUARD] fused_ok=%c snap_reject=%c stable_accept=%c stable_cycles=%d "
+                    "decay=%c odom_fallback=%c target=(%.3f,%.3f)|%.3f applied=(%.3f,%.3f)|%.3f\n",
+                    LocMath::isFinitePose(fusedPose) ? 'Y' : 'N',
+                    controllerUpdate.rejectedSnap ? 'Y' : 'N',
+                    controllerUpdate.acceptedStableJump ? 'Y' : 'N',
+                    controllerUpdate.stableJumpCycles,
+                    controllerUpdate.decayingToOdom ? 'Y' : 'N',
+                    controllerUpdate.usedOdomFallback ? 'Y' : 'N',
+                    controllerUpdate.targetCorrection.x(),
+                    controllerUpdate.targetCorrection.y(),
+                    controllerUpdate.targetCorrection.norm(),
+                    controllerUpdate.correction.x(),
+                    controllerUpdate.correction.y(),
+                    controllerUpdate.correction.norm());
+            }
         }
 
+        const uint32_t now = pros::millis();
         const bool urgentScreenRefresh =
             controllerUpdate.rejectedSnap ||
             controllerUpdate.acceptedStableJump ||
@@ -684,43 +687,45 @@ static void localizationInit() {
 
     renderInitStage(0.90f, "Init localization", "Starting filter...");
 
-    std::printf("\n[LOC_CONFIG] ═════════════════════════════════════════════════\n");
-    std::printf("[LOC_CONFIG] Canonical Internal Frame Convention:\n");
-    std::printf("[LOC_CONFIG]   Position: metres\n");
-    std::printf("[LOC_CONFIG]   Heading:  radians (0 = +X east/forward, CCW+)\n");
-    std::printf("[LOC_CONFIG]   Field:    +X east, +Y north/left\n");
-    std::printf("[LOC_CONFIG]\n");
-    std::printf("[LOC_CONFIG] Startup Pose Mode: ");
-    switch (CONFIG::STARTUP_POSE_MODE) {
-        case CONFIG::StartupPoseMode::ConfiguredStartPoseOnly:
-            std::printf("ConfiguredStartPoseOnly\n");
-            break;
-        case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading:
-            std::printf("GPSXYPlusIMUHeading\n");
-            break;
-        case CONFIG::StartupPoseMode::FullGPSInit:
-            std::printf("FullGPSInit\n");
-            break;
-        default:
-            std::printf("UNKNOWN\n");
+    if constexpr (CONFIG::ODOM_DEBUG_ENABLE) {
+        std::printf("\n[LOC_CONFIG] ═════════════════════════════════════════════════\n");
+        std::printf("[LOC_CONFIG] Canonical Internal Frame Convention:\n");
+        std::printf("[LOC_CONFIG]   Position: metres\n");
+        std::printf("[LOC_CONFIG]   Heading:  radians (0 = +X east/forward, CCW+)\n");
+        std::printf("[LOC_CONFIG]   Field:    +X east, +Y north/left\n");
+        std::printf("[LOC_CONFIG]\n");
+        std::printf("[LOC_CONFIG] Startup Pose Mode: ");
+        switch (CONFIG::STARTUP_POSE_MODE) {
+            case CONFIG::StartupPoseMode::ConfiguredStartPoseOnly:
+                std::printf("ConfiguredStartPoseOnly\n");
+                break;
+            case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading:
+                std::printf("GPSXYPlusIMUHeading\n");
+                break;
+            case CONFIG::StartupPoseMode::FullGPSInit:
+                std::printf("FullGPSInit\n");
+                break;
+            default:
+                std::printf("UNKNOWN\n");
+        }
+        std::printf("[LOC_CONFIG] Start Pose: (%.3f, %.3f, %.3f rad)\n",
+            startPose.x(), startPose.y(), startPose.z());
+        std::printf("[LOC_CONFIG] Default IMU Init Heading: %.1f deg compass\n",
+            CONFIG::DEFAULT_IMU_INIT_ANGLE_deg);
+        std::printf("[LOC_CONFIG] GPS Hard Reject Threshold: %.3f in\n", CONFIG::GPS_ERROR_THRESHOLD_in);
+        std::printf("[LOC_CONFIG] GPS Sensor Enabled: %s\n",
+            CONFIG::MCL_ENABLE_GPS_SENSOR ? "YES" : "NO");
+        std::printf("[LOC_CONFIG] Distance Sensors Disabled: %s\n",
+            CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING ? "YES" : "NO");
+        std::printf("[LOC_CONFIG] Active MCL Sensors (gps+distance): %zu\n", sensors.size());
+        std::printf("[LOC_CONFIG] Controller Guard: max=%.3f in step=%.3f in jump=%.3f in reacquire=%.3f in/%d cycles\n",
+            CONFIG::LOC_CONTROLLER_CORRECTION_MAX_in,
+            CONFIG::LOC_CONTROLLER_CORRECTION_STEP_in,
+            CONFIG::LOC_CONTROLLER_CORRECTION_JUMP_REJECT_in,
+            CONFIG::LOC_CONTROLLER_REACQUIRE_DEADBAND_in,
+            CONFIG::LOC_CONTROLLER_REACQUIRE_STABLE_CYCLES);
+        std::printf("[LOC_CONFIG] ═════════════════════════════════════════════════\n\n");
     }
-    std::printf("[LOC_CONFIG] Start Pose: (%.3f, %.3f, %.3f rad)\n",
-        startPose.x(), startPose.y(), startPose.z());
-    std::printf("[LOC_CONFIG] Default IMU Init Heading: %.1f deg compass\n",
-        CONFIG::DEFAULT_IMU_INIT_ANGLE_deg);
-    std::printf("[LOC_CONFIG] GPS Hard Reject Threshold: %.3f in\n", CONFIG::GPS_ERROR_THRESHOLD_in);
-    std::printf("[LOC_CONFIG] GPS Sensor Enabled: %s\n",
-        CONFIG::MCL_ENABLE_GPS_SENSOR ? "YES" : "NO");
-    std::printf("[LOC_CONFIG] Distance Sensors Disabled: %s\n",
-        CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING ? "YES" : "NO");
-    std::printf("[LOC_CONFIG] Active MCL Sensors (gps+distance): %zu\n", sensors.size());
-    std::printf("[LOC_CONFIG] Controller Guard: max=%.3f in step=%.3f in jump=%.3f in reacquire=%.3f in/%d cycles\n",
-        CONFIG::LOC_CONTROLLER_CORRECTION_MAX_in,
-        CONFIG::LOC_CONTROLLER_CORRECTION_STEP_in,
-        CONFIG::LOC_CONTROLLER_CORRECTION_JUMP_REJECT_in,
-        CONFIG::LOC_CONTROLLER_REACQUIRE_DEADBAND_in,
-        CONFIG::LOC_CONTROLLER_REACQUIRE_STABLE_CYCLES);
-    std::printf("[LOC_CONFIG] ═════════════════════════════════════════════════\n\n");
 
     particleFilter = new ParticleFilter(
         predictionFn, angleFn, sensors,
@@ -791,10 +796,14 @@ void initialize() {
     createRobotObjects();
     startupLog("register subsystems");
     subsystemInit();
-    renderInitStage(0.18f, "Init subsystems", "Calibrating IMU");
-    startupLog("calibrate imu begin");
-    drivetrain->calibrateImu();
-    startupLog("calibrate imu done");
+    renderInitStage(0.18f, "Init subsystems", "Preparing EZ motion");
+    startupLog("auton motion init begin");
+    const bool ezMotionReady = initializeAutonMotion();
+    startupLog("auton motion init done ok=%d", ezMotionReady ? 1 : 0);
+    if (!ezMotionReady) {
+        startupLog("falling back to direct drivetrain IMU calibration");
+        drivetrain->calibrateImu();
+    }
     drivetrain->resetHeading(CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian));
     startupLog("construct ui sensors");
     uiGps = new pros::Gps(CONFIG::MCL_GPS_PORT);
@@ -872,7 +881,6 @@ void opcontrol() {
     CommandScheduler::reset();
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
-    bool downBAutonLatch = false;
     enum class IntakeMode {
         Off,
         Loading,
@@ -960,7 +968,7 @@ void opcontrol() {
         selector->set_value(selectMode);
         top->set_value(upMode);
 
-        if (downBHeld && !downBAutonLatch) {
+        if (downBHeld) {
             autonomous();
             if (AutonSelector::getAuton() != Auton::NONE) {
                 master.rumble(".");
@@ -977,7 +985,6 @@ void opcontrol() {
                 drivetrain->resetDriverAssistState();
             }
         }
-        downBAutonLatch = downBHeld;
 
         if (drivetrain->getCurrentCommand() == nullptr) {
             drivetrain->driverArcade(forward, turn);

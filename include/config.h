@@ -408,11 +408,11 @@ inline constexpr QAngle STARTUP_GPS_READY_HEADING = STARTUP_GPS_READY_HEADING_de
 
 // ── Odom Debug Diagnostics ──────────────────────────────────────────────────
 
-constexpr bool     ODOM_DEBUG_ENABLE               = true;
+constexpr bool     ODOM_DEBUG_ENABLE               = false;
 constexpr uint32_t ODOM_DEBUG_LOG_EVERY_ms          = 200;
 constexpr double   ODOM_TURN_TRANSLATION_WARN_IN   = 0.35;
 
-constexpr bool     PF_DEBUG_ENABLE                  = true;
+constexpr bool     PF_DEBUG_ENABLE                  = false;
 constexpr uint32_t PF_DEBUG_LOG_EVERY_ms            = 150;
 constexpr float    PF_DEBUG_CORRECTION_WARN_in      = 4.0f;
 
@@ -639,6 +639,9 @@ constexpr uint32_t PATH_TELEMETRY_LOG_EVERY_ms = 50;
 // ── PID gains ───────────────────────────────────────────────────────────────
 //  PID(kP, kI, kD, integralCap)  — see feedback/pid.h
 
+constexpr float AUTON_DRIVE_SLEW_STEP = 8.0f;
+constexpr float AUTON_TURN_SLEW_STEP = 10.0f;
+
 constexpr float PID_AUTOTUNE_DRIVE_TARGET_in = 24.0f;
 constexpr float PID_AUTOTUNE_DRIVE_RELAY = 0.55f;
 constexpr float PID_AUTOTUNE_DRIVE_NOISE_in = 0.75f;
@@ -649,7 +652,7 @@ constexpr uint32_t PID_AUTOTUNE_TIMEOUT_ms = 15000;
 constexpr std::size_t PID_AUTOTUNE_REQUIRED_PEAK_PAIRS = 4;
 constexpr std::size_t PID_AUTOTUNE_ANALYSIS_PEAK_PAIRS = 3;
 
-inline constexpr PID::Gains TURN_PID      {2.0f, 0.0f, 0.15f, 0.0f};
+inline constexpr PID::Gains TURN_PID      {3.2643f, 0.108629f, 65.3947f, 10.0f};
 inline constexpr PID::Gains DISTANCE_PID  {5.0f, 0.0f, 0.3f,  0.0f};
 
 // ── RAMSETE path-following parameters ───────────────────────────────────────

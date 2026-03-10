@@ -39,13 +39,22 @@ void copyString(char* dst, std::size_t size, const char* src) {
     std::snprintf(dst, size, "%s", src ? src : "");
 }
 
-PID::Gains gainsFromKuPu(float kPScale, float tiScale, float tdScale, float ku, float puSec) {
+PID::Gains gainsFromKuPu(float kPScale,
+                        float tiScale,
+                        float tdScale,
+                        float ku,
+                        float puSec,
+                        float controllerDtSec) {
     PID::Gains gains;
     gains.kP = kPScale * ku;
-    gains.kI = (tiScale > 0.0f && puSec > 1e-5f)
+    const float continuousKi = (tiScale > 0.0f && puSec > 1e-5f)
         ? gains.kP / (tiScale * puSec)
         : 0.0f;
-    gains.kD = gains.kP * tdScale * puSec;
+    const float continuousKd = gains.kP * tdScale * puSec;
+    gains.kI = continuousKi * controllerDtSec;
+    gains.kD = controllerDtSec > 1e-5f
+        ? continuousKd / controllerDtSec
+        : 0.0f;
     gains.integralCap = 0.0f;
     return gains;
 }
@@ -119,10 +128,14 @@ RelayPidAutotuner::Result RelayPidAutotuner::run(const Config& config) {
     if (config.requiredPeakPairs < 2) {
         return fail("need at least 2 peak pairs");
     }
+    if (config.controllerPeriodMs == 0) {
+        return fail("controller period must be positive");
+    }
 
     const Eigen::Vector3f startPose = samplePose();
     const uint32_t startMs = pros::millis();
     const uint32_t sampleTimeMs = std::max<uint32_t>(1, config.sampleTimeMs);
+    const float controllerDtSec = static_cast<float>(config.controllerPeriodMs) / 1000.0f;
 
     std::vector<float> positivePeaks;
     std::vector<float> negativePeaks;
@@ -266,21 +279,24 @@ RelayPidAutotuner::Result RelayPidAutotuner::run(const Config& config) {
         return fail("Ku calculation invalid");
     }
 
-    result.gains.zieglerNichols = gainsFromKuPu(0.6f, 0.5f, 0.125f, result.ku, result.puSec);
-    result.gains.noOvershoot = gainsFromKuPu(0.2f, 0.5f, 0.33f, result.ku, result.puSec);
+    result.gains.zieglerNichols = gainsFromKuPu(
+        0.6f, 0.5f, 0.125f, result.ku, result.puSec, controllerDtSec);
+    result.gains.noOvershoot = gainsFromKuPu(
+        0.2f, 0.5f, 0.33f, result.ku, result.puSec, controllerDtSec);
     result.success = true;
     copyString(result.message, sizeof(result.message), "ok");
 
     std::printf(
-        "[PID_TUNE] %s done elapsed=%lums Ku=%.5f Pu=%.4fs amp=%.5f %s\n"
-        "[PID_TUNE] %s ZN       -> P=%.5f I=%.5f D=%.5f\n"
-        "[PID_TUNE] %s NoOver   -> P=%.5f I=%.5f D=%.5f\n",
+        "[PID_TUNE] %s done elapsed=%lums Ku=%.5f Pu=%.4fs amp=%.5f %s dt=%.3fs\n"
+        "[PID_TUNE] %s ZN(discrete)     -> P=%.5f I=%.5f D=%.5f\n"
+        "[PID_TUNE] %s NoOver(discrete) -> P=%.5f I=%.5f D=%.5f\n",
         modeName(config.mode),
         static_cast<unsigned long>(result.elapsedMs),
         result.ku,
         result.puSec,
         result.oscillationAmplitude,
         modeUnit(config.mode),
+        controllerDtSec,
         modeName(config.mode),
         result.gains.zieglerNichols.kP,
         result.gains.zieglerNichols.kI,

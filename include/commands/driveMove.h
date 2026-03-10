@@ -37,7 +37,9 @@ public:
                      Eigen::Vector2f target,
                      std::function<Eigen::Vector3f()> poseSource,
                      float tolerance = 0.02f,
-                     float maxOutput = 127.0f)
+                     float maxOutput = 127.0f,
+                     bool stopOnEnd = true,
+                     bool slewEnabled = false)
         : m_drivetrain(drivetrain)
         , m_target(target)
         , m_poseSource(std::move(poseSource))
@@ -46,6 +48,8 @@ public:
         , m_headingTarget(0.0f)
         , m_driveSign(1)
         , m_maxOutput(std::fabs(maxOutput))
+        , m_stopOnEnd(stopOnEnd)
+        , m_slewEnabled(slewEnabled)
         , m_distPid(CONFIG::DISTANCE_PID)
         , m_turnPid(CONFIG::TURN_PID) {}
 
@@ -56,7 +60,9 @@ public:
                      float headingTarget,
                      int driveSign,
                      float tolerance = 0.02f,
-                     float maxOutput = 127.0f)
+                     float maxOutput = 127.0f,
+                     bool stopOnEnd = true,
+                     bool slewEnabled = false)
         : m_drivetrain(drivetrain)
         , m_target(target)
         , m_poseSource(std::move(poseSource))
@@ -65,6 +71,8 @@ public:
         , m_headingTarget(headingTarget)
         , m_driveSign(driveSign >= 0 ? 1 : -1)
         , m_maxOutput(std::fabs(maxOutput))
+        , m_stopOnEnd(stopOnEnd)
+        , m_slewEnabled(slewEnabled)
         , m_distPid(CONFIG::DISTANCE_PID)
         , m_turnPid(CONFIG::TURN_PID) {}
 
@@ -72,6 +80,8 @@ public:
         m_distPid.reset();
         m_turnPid.reset();
         m_aligningToTarget = false;
+        m_lastDriveOut = 0.0f;
+        m_lastTurnOut = 0.0f;
     }
 
     void execute() override {
@@ -116,6 +126,21 @@ public:
 
         driveOut *= alignmentScale;
 
+        if (m_slewEnabled) {
+            driveOut = slewTowards(m_lastDriveOut, driveOut, CONFIG::AUTON_DRIVE_SLEW_STEP);
+            m_lastDriveOut = driveOut;
+            const float slewTurnOut =
+                slewTowards(m_lastTurnOut, turnOut, CONFIG::AUTON_TURN_SLEW_STEP);
+            m_lastTurnOut = slewTurnOut;
+
+            // Okapi yaw is clockwise-positive, while our internal heading error is
+            // counterclockwise-positive.
+            m_drivetrain->arcade(
+                utils::clamp(driveOut, -m_maxOutput, m_maxOutput),
+                -utils::clamp(slewTurnOut, -m_maxOutput, m_maxOutput));
+            return;
+        }
+
         // Okapi yaw is clockwise-positive, while our internal heading error is
         // counterclockwise-positive.
         m_drivetrain->arcade(
@@ -123,8 +148,10 @@ public:
             -utils::clamp(turnOut, -m_maxOutput, m_maxOutput));
     }
 
-    void end(bool /*interrupted*/) override {
-        m_drivetrain->stop();
+    void end(bool interrupted) override {
+        if (interrupted || m_stopOnEnd) {
+            m_drivetrain->stop();
+        }
     }
 
     bool isFinished() override {
@@ -138,6 +165,10 @@ public:
     }
 
 private:
+    static float slewTowards(float current, float target, float step) {
+        return current + utils::clamp(target - current, -step, step);
+    }
+
     Eigen::Vector3f samplePose() const {
         const Eigen::Vector3f rawPose =
             m_poseSource ? m_poseSource() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
@@ -154,7 +185,11 @@ private:
     float m_headingTarget;
     int m_driveSign;
     float m_maxOutput;
+    bool m_stopOnEnd = true;
+    bool m_slewEnabled = false;
     bool m_aligningToTarget = false;
+    float m_lastDriveOut = 0.0f;
+    float m_lastTurnOut = 0.0f;
     PID m_distPid;
     PID m_turnPid;
 };

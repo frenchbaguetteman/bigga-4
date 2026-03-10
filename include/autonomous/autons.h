@@ -15,6 +15,7 @@ enum class Auton {
     TUNE_DRIVE_PID,
     TUNE_TURN_PID,
     EXAMPLE_MOVE,
+    EXAMPLE_SWING,
     EXAMPLE_TURN,
     EXAMPLE_PATH,
     EXAMPLE_LTV,
@@ -39,7 +40,10 @@ struct AutonEntry {
     AutonFn run = nullptr;
 };
 
-using AutonList = std::array<AutonEntry, 10>;
+using AutonList = std::array<AutonEntry, 11>;
+
+/** Prepare the vendored EZ-Template motion backend during startup. */
+bool initializeAutonMotion();
 
 /** Ordered list used by the UI and build plumbing. */
 const AutonList& availableAutons();

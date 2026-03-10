@@ -28,6 +28,7 @@ public:
         float relayAmplitude = 0.4f;           // normalized drive command [0, 1]
         float noiseBand = 0.01f;               // metres or radians
         uint32_t sampleTimeMs = 10;
+        uint32_t controllerPeriodMs = 10;      // discrete PID update period
         uint32_t timeoutMs = 15000;
         std::size_t requiredPeakPairs = 4;     // full oscillations to collect
         std::size_t analysisPeakPairs = 3;     // most recent pairs used for Ku/Pu
