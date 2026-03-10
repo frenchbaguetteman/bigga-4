@@ -40,9 +40,7 @@ struct RuntimeViewModel {
     std::array<DistanceSensorViewModel, 4> distanceSensors{};
     std::vector<Eigen::Vector2f> pfParticleSample;  // sparse cloud for map UI
     Auton selectedAuton = Auton::NONE;
-    Alliance selectedAlliance = Alliance::RED;
     std::string auton = "";
-    std::string alliance = "";
     std::string status = "";
 };
 

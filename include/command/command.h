@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <functional>
 #include <memory>
@@ -63,5 +64,5 @@ public:
 
 protected:
     friend class CommandScheduler;
-    bool m_scheduled = false;
+    std::atomic<bool> m_scheduled{false};
 };

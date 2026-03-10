@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include "config.h"
+#include "pros/rtos.hpp"
 #include <string>
 #include <cstdio>
 #include "Eigen/Core"
@@ -24,6 +26,15 @@ public:
     static void send(float time,
                      const Eigen::Vector3f& current,
                      const Eigen::Vector3f& desired) {
+        if constexpr (!CONFIG::PATH_TELEMETRY_ENABLE) {
+            return;
+        }
+        const uint32_t now = pros::millis();
+        if (now - s_lastPoseSampleMs < CONFIG::PATH_TELEMETRY_LOG_EVERY_ms) {
+            return;
+        }
+        s_lastPoseSampleMs = now;
+
         JsonBuilder jb;
         jb.beginObject()
           .key("t").value(time)
@@ -40,11 +51,20 @@ public:
 
     /** Send a simple key-value telemetry message. */
     static void send(const std::string& key, float value) {
+        if constexpr (!CONFIG::PATH_TELEMETRY_ENABLE) {
+            return;
+        }
         std::printf("{\"%s\":%.4f}\n", key.c_str(), value);
     }
 
     /** Send raw JSON string. */
     static void sendRaw(const std::string& json) {
+        if constexpr (!CONFIG::PATH_TELEMETRY_ENABLE) {
+            return;
+        }
         std::printf("%s\n", json.c_str());
     }
+
+private:
+    static inline uint32_t s_lastPoseSampleMs = 0;
 };

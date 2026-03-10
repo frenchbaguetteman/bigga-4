@@ -141,12 +141,12 @@ inline constexpr QAngle ANGLE_NOISE = ANGLE_NOISE_deg * degree;
 
 // ── Drivetrain Motor Ports (negative = reversed) ────────────────────────────
 
-inline const std::vector<std::int8_t> LEFT_DRIVE_PORTS  = {-11, -15, -14};
-inline const std::vector<std::int8_t> RIGHT_DRIVE_PORTS = { 18,  17,  20};
+inline constexpr std::array<std::int8_t, 3> LEFT_DRIVE_PORTS  {{-11, -15, -14}};
+inline constexpr std::array<std::int8_t, 3> RIGHT_DRIVE_PORTS {{ 18,  17,  20}};
 
 // ── Intake Motor Ports ──────────────────────────────────────────────────────
 
-inline const std::vector<std::int8_t> INTAKE_PORTS = {-6, 8};
+inline constexpr std::array<std::int8_t, 2> INTAKE_PORTS {{-6, 8}};
 
 // ── Sensor Ports ────────────────────────────────────────────────────────────
 
@@ -259,7 +259,9 @@ inline Eigen::Vector2f robot_offset_to_internal(QLength offsetXRight, QLength of
 }
 
 // GPS offset in metres, INTERNAL robot frame (+X forward, +Y left)
-inline const Eigen::Vector2f GPS_OFFSET = robot_offset_to_internal(MCL_GPS_OFFSET_X, MCL_GPS_OFFSET_Y);
+inline Eigen::Vector2f gpsOffset() {
+    return robot_offset_to_internal(MCL_GPS_OFFSET_X, MCL_GPS_OFFSET_Y);
+}
 
 constexpr float MCL_LEFT_FACING_deg  =  90.0f;
 constexpr float MCL_RIGHT_FACING_deg = -90.0f;
@@ -279,14 +281,25 @@ inline Eigen::Vector3f sensor_offset_to_internal(QLength offsetXRight,
                            facing.convert(radian));
 }
 
-inline const Eigen::Vector3f DIST_LEFT_OFFSET {
-    sensor_offset_to_internal(MCL_LEFT_OFFSET_X, MCL_LEFT_OFFSET_Y, MCL_LEFT_FACING)};
-inline const Eigen::Vector3f DIST_RIGHT_OFFSET{
-    sensor_offset_to_internal(MCL_RIGHT_OFFSET_X, MCL_RIGHT_OFFSET_Y, MCL_RIGHT_FACING)};
-inline const Eigen::Vector3f DIST_FRONT_OFFSET{
-    sensor_offset_to_internal(MCL_FRONT_OFFSET_X, MCL_FRONT_OFFSET_Y, MCL_FRONT_FACING)};
-inline const Eigen::Vector3f DIST_BACK_OFFSET {
-    sensor_offset_to_internal(MCL_BACK_OFFSET_X, MCL_BACK_OFFSET_Y, MCL_BACK_FACING)};
+inline Eigen::Vector3f distLeftOffset() {
+    return sensor_offset_to_internal(
+        MCL_LEFT_OFFSET_X, MCL_LEFT_OFFSET_Y, MCL_LEFT_FACING);
+}
+
+inline Eigen::Vector3f distRightOffset() {
+    return sensor_offset_to_internal(
+        MCL_RIGHT_OFFSET_X, MCL_RIGHT_OFFSET_Y, MCL_RIGHT_FACING);
+}
+
+inline Eigen::Vector3f distFrontOffset() {
+    return sensor_offset_to_internal(
+        MCL_FRONT_OFFSET_X, MCL_FRONT_OFFSET_Y, MCL_FRONT_FACING);
+}
+
+inline Eigen::Vector3f distBackOffset() {
+    return sensor_offset_to_internal(
+        MCL_BACK_OFFSET_X, MCL_BACK_OFFSET_Y, MCL_BACK_FACING);
+}
 
 // ── MCL Distance Sensor Fusion Controls ─────────────────────────────────────
 
@@ -478,6 +491,12 @@ constexpr float LOC_MCL_CORRECTION_STEP_in            = 0.04f;
 constexpr float LOC_MCL_CORRECTION_DEADBAND_in        = 0.10f;
 constexpr float LOC_MCL_CORRECTION_JUMP_REJECT_in     = 3.5f;
 constexpr float LOC_MCL_MIN_ESS_RATIO                 = 0.22f;
+constexpr float LOC_CONTROLLER_CORRECTION_MAX_in      = 12.0f;
+constexpr float LOC_CONTROLLER_CORRECTION_STEP_in     = 0.06f;
+constexpr float LOC_CONTROLLER_CORRECTION_DEADBAND_in = 0.08f;
+constexpr float LOC_CONTROLLER_CORRECTION_JUMP_REJECT_in = 1.5f;
+constexpr float LOC_CONTROLLER_REACQUIRE_DEADBAND_in  = 0.20f;
+constexpr int   LOC_CONTROLLER_REACQUIRE_STABLE_CYCLES = 6;
 
 // Distance-model obstacles for the Push Back field composition.
 // Coordinates are in canonical field-frame metres (origin at field centre).
@@ -591,6 +610,16 @@ inline constexpr QLength LOC_MCL_CORRECTION_DEADBAND =
     LOC_MCL_CORRECTION_DEADBAND_in * inch;
 inline constexpr QLength LOC_MCL_CORRECTION_JUMP_REJECT =
     LOC_MCL_CORRECTION_JUMP_REJECT_in * inch;
+inline constexpr QLength LOC_CONTROLLER_CORRECTION_MAX =
+    LOC_CONTROLLER_CORRECTION_MAX_in * inch;
+inline constexpr QLength LOC_CONTROLLER_CORRECTION_STEP =
+    LOC_CONTROLLER_CORRECTION_STEP_in * inch;
+inline constexpr QLength LOC_CONTROLLER_CORRECTION_DEADBAND =
+    LOC_CONTROLLER_CORRECTION_DEADBAND_in * inch;
+inline constexpr QLength LOC_CONTROLLER_CORRECTION_JUMP_REJECT =
+    LOC_CONTROLLER_CORRECTION_JUMP_REJECT_in * inch;
+inline constexpr QLength LOC_CONTROLLER_REACQUIRE_DEADBAND =
+    LOC_CONTROLLER_REACQUIRE_DEADBAND_in * inch;
 
 // ── Speed / acceleration limits ─────────────────────────────────────────────
 
@@ -602,12 +631,26 @@ inline constexpr QSpeed MAX_SPEED = MAX_SPEED_inps * ips;
 inline constexpr QAcceleration MAX_ACCELERATION = MAX_ACCELERATION_inps2 * ips2;
 inline constexpr QAngularSpeed MAX_ANGULAR_VEL = MAX_ANGULAR_VEL_degps * dps;
 
+// ── Path-controller telemetry ───────────────────────────────────────────────
+
+constexpr bool     PATH_TELEMETRY_ENABLE       = false;
+constexpr uint32_t PATH_TELEMETRY_LOG_EVERY_ms = 50;
+
 // ── PID gains ───────────────────────────────────────────────────────────────
 //  PID(kP, kI, kD, integralCap)  — see feedback/pid.h
 
-inline PID::Gains TURN_PID      {2.0f, 0.0f, 0.15f, 0.0f};
-inline PID::Gains DISTANCE_PID  {5.0f, 0.0f, 0.3f,  0.0f};
-inline PID::Gains INTAKE_PID    {1.0f, 0.0f, 0.0f,  0.0f};
+constexpr float PID_AUTOTUNE_DRIVE_TARGET_in = 24.0f;
+constexpr float PID_AUTOTUNE_DRIVE_RELAY = 0.55f;
+constexpr float PID_AUTOTUNE_DRIVE_NOISE_in = 0.75f;
+constexpr float PID_AUTOTUNE_TURN_TARGET_deg = 90.0f;
+constexpr float PID_AUTOTUNE_TURN_RELAY = 0.40f;
+constexpr float PID_AUTOTUNE_TURN_NOISE_deg = 2.0f;
+constexpr uint32_t PID_AUTOTUNE_TIMEOUT_ms = 15000;
+constexpr std::size_t PID_AUTOTUNE_REQUIRED_PEAK_PAIRS = 4;
+constexpr std::size_t PID_AUTOTUNE_ANALYSIS_PEAK_PAIRS = 3;
+
+inline constexpr PID::Gains TURN_PID      {2.0f, 0.0f, 0.15f, 0.0f};
+inline constexpr PID::Gains DISTANCE_PID  {5.0f, 0.0f, 0.3f,  0.0f};
 
 // ── RAMSETE path-following parameters ───────────────────────────────────────
 
@@ -616,7 +659,9 @@ constexpr float RAMSETE_BETA = 45.0f;      // aggressiveness  (β > 0)
 
 // ── LTV unicycle cost matrix  Q = diag(q1, q2, q3) ─────────────────────────
 
-inline Eigen::Vector3f DEFAULT_DT_COST_Q{1.0f, 1.0f, 10.0f};
+inline Eigen::Vector3f defaultDtCostQ() {
+    return Eigen::Vector3f(1.0f, 1.0f, 10.0f);
+}
 
 // ── Drivetrain feedforward model ────────────────────────────────────────────
 

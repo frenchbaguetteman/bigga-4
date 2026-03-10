@@ -6,11 +6,12 @@ This page is the "show me the pattern" version of the docs. Every example here i
 
 The easiest way to learn the auton stack is to read these in order inside [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp):
 
-1. `makeExampleMove()`
-2. `makeExampleTurn()`
-3. `makeExamplePath()`
-4. `makeNegative1()` or `makePositive1()`
-5. `makeSkills()`
+1. `runExampleMove()`
+2. `runExampleTurn()`
+3. `runExamplePath()`
+4. `runExampleLtv()`
+5. `runNegative1()` or `runPositive1()`
+6. `runSkills()`
 
 That order goes from simplest to most composed.
 
@@ -24,9 +25,9 @@ const Eigen::Vector2f forward = robotRelativePoint(start, 24.0f * kInToM, 0.0f);
 const Eigen::Vector2f home = start.head<2>();
 
 return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-    new DriveMoveCommand(ctx.drivetrain, forward, ctx.poseSource),
+    new DriveMoveCommand(&ctx.drivetrain, forward, ctx.poseSource),
     new WaitCommand(0.2f),
-    new DriveMoveCommand(ctx.drivetrain, home, ctx.poseSource),
+    new DriveMoveCommand(&ctx.drivetrain, home, ctx.poseSource),
 });
 ```
 
@@ -44,9 +45,9 @@ Use `RotateCommand` when the robot should only change heading.
 const Eigen::Vector3f start = basePose(ctx);
 
 return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-    new RotateCommand(ctx.drivetrain, wrapRadians(start.z() + 0.5f * kPi), ctx.poseSource),
+    new RotateCommand(&ctx.drivetrain, wrapRadians(start.z() + 0.5f * kPi), ctx.poseSource),
     new WaitCommand(0.2f),
-    new RotateCommand(ctx.drivetrain, start.z(), ctx.poseSource),
+    new RotateCommand(&ctx.drivetrain, start.z(), ctx.poseSource),
 });
 ```
 
@@ -69,7 +70,7 @@ MotionProfile profile = buildProfile({
 }, 1.0f, 1.8f);
 
 return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-    new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource),
+    new RamseteCommand(&ctx.drivetrain, profile, ctx.poseSource),
 });
 ```
 
@@ -79,13 +80,36 @@ Use this for:
 - controlling both translation and heading together
 - motion that should be easier to scale than chained point moves
 
+## Recipe: Follow the Same Path With LTV
+
+Use `LtvUnicycleCommand` when you want the same profile-tracking workflow with a finite-horizon LTV-LQR controller.
+
+```cpp
+MotionProfile profile = buildProfile({
+    robotRelativePose(start, 0.0f * kInToM, 0.0f * kInToM, 0.0f),
+    robotRelativePose(start, 18.0f * kInToM, 10.0f * kInToM, 0.35f),
+    robotRelativePose(start, 36.0f * kInToM, -8.0f * kInToM, -0.25f),
+    robotRelativePose(start, 48.0f * kInToM, 0.0f * kInToM, 0.0f),
+}, 1.0f, 1.8f);
+
+return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
+    new LtvUnicycleCommand(&ctx.drivetrain, profile, ctx.poseSource),
+});
+```
+
+Use this for:
+
+- comparing RAMSETE and LTV on the same path geometry
+- tuning state and control cost matrices against the same path geometry
+- quick bring-up of profiled path tracking without changing the profile builder
+
 ## Recipe: Run a Mechanism at the Same Time
 
 The command builders let you run commands in parallel:
 
 ```cpp
-(new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource))
-    ->alongWith(new IntakeSpinCommand(ctx.intakes, 127));
+(new RamseteCommand(&ctx.drivetrain, profile, ctx.poseSource))
+    ->alongWith(new IntakeSpinCommand(&ctx.intakes, 127));
 ```
 
 That pattern is already used in the scoring autons and in `makeExamplePath()`.
@@ -124,15 +148,15 @@ To add a new builder:
 Minimal switch entry pattern:
 
 ```cpp
-case Auton::EXAMPLE_PATH:
-    return makeExamplePath(ctx);
+case Auton::EXAMPLE_LTV:
+    return makeRoutineCommand(ctx, runExampleLtv);
 ```
 
-If you only want to replace a placeholder, point `NEGATIVE_2` or `POSITIVE_2` at a new builder instead of the current alias.
+If you want a new selector entry, add a new enum value and wire it all the way through the auton factory instead of silently aliasing an existing routine.
 
 ## Recipe: Build a Motion Profile
 
-Inside `autons.cpp`, the local helper is:
+Use the public helpers in [`include/motionProfiling/profileBuilder.h`](../include/motionProfiling/profileBuilder.h):
 
 ```cpp
 MotionProfile buildProfile(std::initializer_list<Eigen::Vector3f> waypoints,
@@ -155,16 +179,27 @@ Remember:
 - `x` and `y` are meters
 - `theta` is radians
 - the final two numbers are max velocity and max acceleration
+- the helper builds a trapezoidal velocity profile over the path's total arc length
 
 ## Recipe: Use the Example Routines for Tuning
 
 The example autons are not filler. They are the fastest tuning surfaces in the repo:
 
+- `Tune Drive PID` to relay-tune `CONFIG::DISTANCE_PID` on-robot
+- `Tune Turn PID` to relay-tune `CONFIG::TURN_PID` on-robot
 - `Example Move` for `DriveMoveCommand`
 - `Example Turn` for `RotateCommand`
 - `Example Path` for RAMSETE and profile tuning
+- `Example LTV` for LTV-unicycle and profile tuning
 
 That is usually better than tuning against a full match auton, because you remove game logic and mechanism timing from the test.
+
+The PID tune autons print two gain sets to terminal:
+
+- `NoOver` is the safer starting point for VEX drivetrains
+- `ZN` is the more aggressive Ziegler-Nichols set
+
+The UI status line will tell you when a tune is active, but the full numeric output is printed to the terminal for copy-paste into [`include/config.h`](../include/config.h).
 
 ## Common Mistakes
 
@@ -172,7 +207,7 @@ That is usually better than tuning against a full match auton, because you remov
 - Forgetting that headings are radians, not degrees.
 - Tuning motion before checking whether localization is sane.
 - Duplicating helper code instead of promoting it into `sharedCommands.h`.
-- Editing a placeholder auton and forgetting that the selector may still point at the old builder.
+- Editing one auton and forgetting that the selector or default header may still point at a different routine.
 
 ## Read Next
 

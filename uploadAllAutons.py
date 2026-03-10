@@ -5,7 +5,7 @@ Writes include/auton.h for each autonomous selection, then compiles and
 uploads to the V5 brain via `pros mu --slot N --name "name"`.
 
 Usage:
-    python3 uploadAllAutons.py          # uploads all autons to slots 1-5
+    python3 uploadAllAutons.py          # uploads all competition autons to slots 1-3
     python3 uploadAllAutons.py --dry    # print commands without executing
 """
 import os
@@ -17,18 +17,31 @@ AUTON_HEADER = "include/auton.h"
 # (slot, auton enum value, display name, alliance)
 AUTONS = [
     (1, "Auton::NEGATIVE_1",  "Negative 1",  "Alliance::RED"),
-    (2, "Auton::NEGATIVE_2",  "Negative 2",  "Alliance::RED"),
-    (3, "Auton::POSITIVE_1",  "Positive 1",  "Alliance::RED"),
-    (4, "Auton::POSITIVE_2",  "Positive 2",  "Alliance::RED"),
-    (5, "Auton::SKILLS",      "Skills",       "Alliance::RED"),
+    (2, "Auton::POSITIVE_1",  "Positive 1",  "Alliance::RED"),
+    (3, "Auton::SKILLS",      "Skills",       "Alliance::RED"),
 ]
 
 HEADER_TEMPLATE = """\
+/**
+ * @file auton.h
+ * Generated header that selects the active autonomous routine.
+ *
+ * In production this file is overwritten by uploadAllAutons.py before
+ * each firmware slot upload.
+ */
 #pragma once
+
 #include "autonomous/autons.h"
 
-#define SELECTED_AUTON  {auton}
+// ── Active auton (change per-slot or via uploadAllAutons.py) ────────────────
+
+#ifndef SELECTED_AUTON
+#define SELECTED_AUTON {auton}
+#endif
+
+#ifndef DEFAULT_ALLIANCE
 #define DEFAULT_ALLIANCE {alliance}
+#endif
 
 inline constexpr Auton DEFAULT_AUTON_SELECTION = SELECTED_AUTON;
 inline constexpr Alliance DEFAULT_ALLIANCE_SELECTION = DEFAULT_ALLIANCE;

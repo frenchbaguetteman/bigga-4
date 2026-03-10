@@ -5,14 +5,23 @@ MFLAGS=-mcpu=cortex-a9 -mfpu=neon-fp16 -mfloat-abi=hard -Os -g -mthumb
 CPPFLAGS=-D_POSIX_THREADS -D_UNIX98_THREAD_MUTEX_ATTRIBUTES -D_POSIX_TIMERS -D_POSIX_MONOTONIC_CLOCK
 GCCFLAGS=-ffunction-sections -fdata-sections -fdiagnostics-color -funwind-tables
 
-# Check if the llemu files in libvgl exist. If they do, define macros that the
-# llemu headers in the kernel repo can use to conditionally include the libvgl
-# versions
-ifneq (,$(wildcard ./include/liblvgl/llemu.h))
-	CPPFLAGS += -D_PROS_INCLUDE_LIBLVGL_LLEMU_H
-endif
-ifneq (,$(wildcard ./include/liblvgl/llemu.hpp))
-	CPPFLAGS += -D_PROS_INCLUDE_LIBLVGL_LLEMU_HPP
+USE_LIBLVGL ?= 1
+
+# The shipped liblvgl archive contains a builtin allocator object with a 10 MB
+# static work buffer. This project overrides that allocator from source so LVGL
+# can stay enabled by default without bloating the image or breaking brain boot.
+ifeq ($(USE_LIBLVGL),1)
+	# Check if the llemu files in libvgl exist. If they do, define macros that the
+	# llemu headers in the kernel repo can use to conditionally include the libvgl
+	# versions
+	ifneq (,$(wildcard ./include/liblvgl/llemu.h))
+		CPPFLAGS += -D_PROS_INCLUDE_LIBLVGL_LLEMU_H
+	endif
+	ifneq (,$(wildcard ./include/liblvgl/llemu.hpp))
+		CPPFLAGS += -D_PROS_INCLUDE_LIBLVGL_LLEMU_HPP
+	endif
+else
+	EXCLUDE_LIBRARIES += $(FWDIR)/liblvgl.a
 endif
 
 WARNFLAGS+=-Wno-psabi
@@ -29,7 +38,7 @@ DEPFLAGS = -MT $$@ -MMD -MP -MF $(DEPDIR)/$$*.Td
 MAKEDEPFOLDER = -$(VV)mkdir -p $(DEPDIR)/$$(dir $$(patsubst $(BINDIR)/%, %, $(ROOT)/$$@))
 RENAMEDEPENDENCYFILE = -$(VV)mv -f $(DEPDIR)/$$*.Td $$(patsubst $(SRCDIR)/%, $(DEPDIR)/%.d, $(ROOT)/$$<) && touch $$@
 
-LIBRARIES+=$(wildcard $(FWDIR)/*.a)
+LIBRARIES+=$(filter-out $(EXCLUDE_LIBRARIES),$(wildcard $(FWDIR)/*.a))
 # Cannot include newlib and libc because not all of the req'd stubs are implemented
 EXCLUDE_COLD_LIBRARIES+=$(FWDIR)/libc.a $(FWDIR)/libm.a
 COLD_LIBRARIES=$(filter-out $(EXCLUDE_COLD_LIBRARIES), $(LIBRARIES))
@@ -186,7 +195,9 @@ endif
 
 quick: $(DEFAULT_BIN)
 
-all: clean $(DEFAULT_BIN)
+all:
+	@$(MAKE) clean
+	@$(MAKE) quick
 
 clean::
 	@echo Cleaning project

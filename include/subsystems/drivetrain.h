@@ -78,9 +78,22 @@ private:
     Eigen::Vector2f m_lastStepDisplacement{0.0f, 0.0f};
 
     /* Driver-assist state */
-    float m_activeBrakeTargetDeg = 0.0f;
-    bool  m_wasStopped = true;
     DriveSpeeds m_lastSpeeds{};
+    float m_driverForwardCurve = CONFIG::DRIVER_FORWARD_CURVE_T;
+    float m_driverTurnCurve = CONFIG::DRIVER_TURN_CURVE_T;
+    float m_driverDeadband = CONFIG::DRIVER_JOYSTICK_DEADBAND;
+    bool m_activeBrakeEnabled = CONFIG::DRIVER_ACTIVE_BRAKE_ENABLED;
+    float m_activeBrakePower = CONFIG::DRIVER_ACTIVE_BRAKE_POWER;
+    float m_activeBrakeKp = CONFIG::DRIVER_ACTIVE_BRAKE_KP;
+    float m_activeBrakeStickDeadband = CONFIG::DRIVER_ACTIVE_BRAKE_STICK_DEADBAND;
+    float m_activeBrakePosDeadbandDeg = CONFIG::DRIVER_ACTIVE_BRAKE_POS_DEADBAND_deg;
+    float m_activeBrakeOutputDeadband = CONFIG::DRIVER_ACTIVE_BRAKE_OUTPUT_DEADBAND;
+    bool m_activeBrakeWasDriving = false;
+    float m_activeBrakeLeftTargetDeg = 0.0f;
+    float m_activeBrakeRightTargetDeg = 0.0f;
 
-    static float joystickCurve(float input, float t);
+    static float joystickCurve(float input, float t, float deadzone);
+    void applyActiveBrake();
+    float leftMotorPositionDeg() const;
+    float rightMotorPositionDeg() const;
 };

@@ -4,16 +4,20 @@
  */
 #pragma once
 
-#include <vector>
+#include "Eigen/Core"
+
+#include <array>
+#include <functional>
 
 enum class Auton {
     NEGATIVE_1,
-    NEGATIVE_2,
     POSITIVE_1,
-    POSITIVE_2,
+    TUNE_DRIVE_PID,
+    TUNE_TURN_PID,
     EXAMPLE_MOVE,
     EXAMPLE_TURN,
     EXAMPLE_PATH,
+    EXAMPLE_LTV,
     SKILLS,
     NONE
 };
@@ -23,11 +27,41 @@ enum class Alliance {
     BLUE
 };
 
+class Drivetrain;
+class Intakes;
+class Lift;
+
+using AutonFn = void (*)();
+
+struct AutonEntry {
+    Auton id = Auton::NONE;
+    const char* name = "None";
+    AutonFn run = nullptr;
+};
+
+using AutonList = std::array<AutonEntry, 10>;
+
 /** Ordered list used by the UI and build plumbing. */
-const std::vector<Auton>& availableAutons();
+const AutonList& availableAutons();
+
+/** Lookup a selector entry by enum id. */
+const AutonEntry* findAuton(Auton auton);
 
 /** Convert an Auton enum to a human-readable name. */
 const char* autonName(Auton auton);
 
 /** Convert an Alliance enum to a human-readable name. */
 const char* allianceName(Alliance alliance);
+
+/** Bind the current robot runtime so auton functions can run directly. */
+void bindAutonRuntime(Drivetrain& drivetrain,
+                      Intakes& intakes,
+                      Lift& lift,
+                      std::function<Eigen::Vector3f()> poseSource,
+                      std::function<bool()> isCancelled = {});
+
+/** Stop and clear the currently bound auton runtime. */
+void resetAutonRuntime();
+
+/** Run a selector entry immediately in the current task. */
+bool runAuton(const AutonEntry& entry);

@@ -5,16 +5,19 @@
 #pragma once
 
 #include "command/command.h"
-#include "subsystems/drivetrain.h"
-#include "okapi/impl/control/iterative/iterativeControllerFactory.hpp"
 #include "config.h"
+#include "feedback/pid.h"
+#include "subsystems/drivetrain.h"
+#include "utils/localization_math.h"
 #include "utils/utils.h"
 #include <cmath>
-#include <vector>
 #include <functional>
+#include <vector>
 
 class RotateCommand : public Command {
 public:
+    static constexpr float kRadiansToDegrees = 180.0f / static_cast<float>(M_PI);
+
     /**
      * @param drivetrain   robot drivetrain
      * @param targetAngle  target heading (radians)
@@ -31,21 +34,22 @@ public:
         , m_poseSource(std::move(poseSource))
         , m_tolerance(tolerance)
         , m_maxOutput(std::fabs(maxOutput))
-        , m_pid(okapi::IterativeControllerFactory::posPID(
-              CONFIG::TURN_PID.kP, CONFIG::TURN_PID.kI, CONFIG::TURN_PID.kD)) {}
+        , m_pid(CONFIG::TURN_PID) {}
 
     void initialize() override {
         m_pid.reset();
-        m_pid.setTarget(0.0);
     }
 
     void execute() override {
-        Eigen::Vector3f pose = m_poseSource();
-        float error = utils::angleDifference(m_targetAngle, pose.z());
-        double output = m_pid.step(static_cast<double>(-error));
+        const Eigen::Vector3f pose = samplePose();
+        const float errorDegrees =
+            utils::angleDifference(m_targetAngle, pose.z()) * kRadiansToDegrees;
+        const float output = m_pid.calculate(0.0f, errorDegrees);
 
+        // Okapi yaw is clockwise-positive, while our internal heading error is
+        // counterclockwise-positive.
         m_drivetrain->arcade(0.0f,
-            utils::clamp(static_cast<float>(output * m_maxOutput), -m_maxOutput, m_maxOutput));
+            -utils::clamp(output, -m_maxOutput, m_maxOutput));
     }
 
     void end(bool /*interrupted*/) override {
@@ -53,7 +57,7 @@ public:
     }
 
     bool isFinished() override {
-        Eigen::Vector3f pose = m_poseSource();
+        const Eigen::Vector3f pose = samplePose();
         float error = std::fabs(utils::angleDifference(m_targetAngle, pose.z()));
         return error < m_tolerance;
     }
@@ -63,10 +67,18 @@ public:
     }
 
 private:
+    Eigen::Vector3f samplePose() const {
+        const Eigen::Vector3f rawPose =
+            m_poseSource ? m_poseSource() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        const Eigen::Vector3f odomPose =
+            m_drivetrain ? m_drivetrain->getOdomPose() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        return LocMath::finitePoseOr(rawPose, odomPose);
+    }
+
     Drivetrain* m_drivetrain;
     float m_targetAngle;
     std::function<Eigen::Vector3f()> m_poseSource;
     float m_tolerance;
     float m_maxOutput;
-    okapi::IterativePosPIDController m_pid;
+    PID m_pid;
 };

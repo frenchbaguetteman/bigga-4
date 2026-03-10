@@ -57,11 +57,12 @@ That startup sequence is implemented in [`src/main.cpp`](../src/main.cpp).
 
 ### 4. Run one of the example autons
 
-This repo already includes three tutorial-grade routines:
+This repo already includes four tutorial-grade routines:
 
 - `Example Move`
 - `Example Turn`
 - `Example Path`
+- `Example LTV`
 
 Those are selectable through the normal auton chooser and live in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp).
 

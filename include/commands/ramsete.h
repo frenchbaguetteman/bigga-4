@@ -19,6 +19,7 @@
 #include "subsystems/drivetrain.h"
 #include "telemetry/telemetry.h"
 #include "config.h"
+#include "utils/localization_math.h"
 #include "utils/utils.h"
 #include "Eigen/Dense"
 #include <cmath>
@@ -53,8 +54,8 @@ public:
         ProfileState desired = m_profile.sample(t);
 
         // Current state
-        Eigen::Vector3f currentPose = m_poseSource();
-        Eigen::Vector3f desiredPose = desired.pose;
+        const Eigen::Vector3f currentPose = samplePose();
+        const Eigen::Vector3f desiredPose = desired.pose;
 
         float desiredVelocity        = desired.linearVelocity;   // v_d
         float desiredAngularVelocity = desired.angularVelocity;  // ω_d
@@ -82,6 +83,15 @@ public:
                     + m_beta * desiredVelocity
                       * utils::sinc(errorAngle) * xyError.y();
 
+        v = utils::clamp(
+            v,
+            -CONFIG::MAX_SPEED.convert(mps),
+            CONFIG::MAX_SPEED.convert(mps));
+        omega = utils::clamp(
+            omega,
+            -CONFIG::MAX_ANGULAR_VEL.convert(radps),
+            CONFIG::MAX_ANGULAR_VEL.convert(radps));
+
         // ── Send to drivetrain ──────────────────────────────────────────
         m_drivetrain->setDriveSpeeds({v, omega});
         m_lastSpeeds = {v, omega};
@@ -97,6 +107,14 @@ public:
     DriveSpeeds getLastSpeeds() const { return m_lastSpeeds; }
 
 private:
+    Eigen::Vector3f samplePose() const {
+        const Eigen::Vector3f rawPose =
+            m_poseSource ? m_poseSource() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        const Eigen::Vector3f odomPose =
+            m_drivetrain ? m_drivetrain->getOdomPose() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        return LocMath::finitePoseOr(rawPose, odomPose);
+    }
+
     std::function<Eigen::Vector3f()> m_poseSource;
     float m_zeta;
     float m_beta;

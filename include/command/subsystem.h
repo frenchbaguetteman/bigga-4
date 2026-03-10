@@ -8,8 +8,8 @@
  */
 #pragma once
 
+#include <atomic>
 #include "command/command.h"
-
 class Subsystem {
 public:
     virtual ~Subsystem() = default;
@@ -22,7 +22,7 @@ public:
     Command* getDefaultCommand() const { return m_defaultCommand; }
 
     /** Which command currently owns this subsystem (nullptr if none). */
-    Command* getCurrentCommand() const { return m_currentCommand; }
+    Command* getCurrentCommand() const { return m_currentCommand.load(); }
 
     /** Register this subsystem with the global CommandScheduler. */
     void registerThis();
@@ -30,5 +30,5 @@ public:
 private:
     friend class CommandScheduler;
     Command* m_defaultCommand  = nullptr;
-    Command* m_currentCommand  = nullptr;
+    std::atomic<Command*> m_currentCommand{nullptr};
 };

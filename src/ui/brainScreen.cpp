@@ -1,76 +1,120 @@
 #include "ui/brainScreen.h"
-#include "ui/screenManager.h"
-#include "ui/theme.h"
+
+#include "config.h"
+#include "ui/autonSelector.h"
+
+#include "pros/rtos.hpp"
 #include "pros/screen.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 namespace BrainScreen {
 
-static float clamp01(float x) {
+namespace {
+
+constexpr std::uint32_t kBackground = 0x00101010;
+constexpr std::uint32_t kText = 0x00ffffff;
+constexpr std::uint32_t kMuted = 0x00b8b8b8;
+
+constexpr int kButtonTop = 176;
+constexpr int kButtonBottom = 228;
+constexpr int kLeftButtonX0 = 18;
+constexpr int kLeftButtonX1 = 232;
+constexpr int kRightButtonX0 = 248;
+constexpr int kRightButtonX1 = 462;
+
+std::uint32_t g_lastTouchMs = 0;
+
+float clamp01(float x) {
     if (!std::isfinite(x)) return 0.0f;
     if (x < 0.0f) return 0.0f;
     if (x > 1.0f) return 1.0f;
     return x;
 }
 
+float metersToInches(float meters) {
+    return meters * 39.3701f;
+}
+
+float headingToCompassDeg(float headingRad) {
+    return CONFIG::internalRadToGpsHeadingDeg(headingRad);
+}
+
+bool pointInside(int x, int y, int x0, int y0, int x1, int y1) {
+    return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+}
+
+void drawRuntimeTouchTargets() {
+    const auto touch = pros::screen::touch_status();
+    if (touch.touch_status != pros::E_TOUCH_PRESSED &&
+        touch.touch_status != pros::E_TOUCH_HELD) {
+        return;
+    }
+
+    const std::uint32_t now = pros::millis();
+    if (now - g_lastTouchMs < 180) {
+        return;
+    }
+
+    if (pointInside(touch.x, touch.y, kLeftButtonX0, kButtonTop, kLeftButtonX1, kButtonBottom)) {
+        g_lastTouchMs = now;
+        AutonSelector::prevAuton();
+        return;
+    }
+
+    if (pointInside(touch.x, touch.y, kRightButtonX0, kButtonTop, kRightButtonX1, kButtonBottom)) {
+        g_lastTouchMs = now;
+        AutonSelector::nextAuton();
+    }
+}
+
+} // namespace
+
 void initialize() {
-    pros::screen::set_eraser(UITheme::kBackground);
+    pros::screen::set_eraser(kBackground);
     pros::screen::erase();
+    g_lastTouchMs = 0;
 }
 
 void renderInit(const InitViewModel& vm) {
-    const float progress = clamp01(vm.progress);
-    int pct = static_cast<int>(std::round(progress * 100.0f));
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
+    const int percent = static_cast<int>(std::round(clamp01(vm.progress) * 100.0f));
 
-    const UITheme::Rect canvas = UITheme::makeRect(0, 0, UITheme::kScreenW, UITheme::kScreenH);
-    const UITheme::Rect brand = UITheme::makeRect(22, 24, 166, 180);
-    const UITheme::Rect status = UITheme::makeRect(202, 24, 256, 180);
-    const UITheme::Rect progressBar = UITheme::makeRect(status.x0 + 18, status.y0 + 92, 220, 18);
+    pros::screen::set_eraser(kBackground);
+    pros::screen::erase();
 
-    UITheme::fillRect(canvas, UITheme::kBackground);
-    UITheme::fillRect(UITheme::makeRect(0, 0, UITheme::kScreenW, 48), UITheme::kBackgroundBand);
-    UITheme::fillRect(UITheme::makeRect(0, 0, 10, UITheme::kScreenH), UITheme::kTealDeep);
-    for (int y = 54; y < UITheme::kScreenH; y += 26) {
-        UITheme::drawDividerH(0, UITheme::kScreenW - 1, y);
-    }
-
-    UITheme::drawPanel(brand, UITheme::kPanelAlt, UITheme::kBorderStrong, UITheme::kTeal);
-    UITheme::drawPanel(status, UITheme::kPanel, UITheme::kBorderStrong, UITheme::kBlue);
-
-    UITheme::printTextfOn(pros::E_TEXT_SMALL, brand.x0 + 14, brand.y0 + 14,
-                          UITheme::kTextMuted, UITheme::kPanelAlt, "COMPETITION BRAIN");
-    UITheme::printTextfOn(pros::E_TEXT_LARGE, brand.x0 + 14, brand.y0 + 36,
-                          UITheme::kText, UITheme::kPanelAlt, "69580A");
-    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 72,
-                          UITheme::kTextMuted, UITheme::kPanelAlt, "System startup");
-    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 98,
-                          UITheme::kTextSoft, UITheme::kPanelAlt, "Localization");
-    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 116,
-                          UITheme::kTextSoft, UITheme::kPanelAlt, "Drive services");
-    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, brand.x0 + 14, brand.y0 + 134,
-                          UITheme::kTextSoft, UITheme::kPanelAlt, "Screen tools");
-
-    UITheme::drawChip(UITheme::makeRect(status.x0 + 18, status.y0 + 16, 92, 22),
-                      "BOOT", UITheme::kTealDeep, UITheme::kTeal, UITheme::kText);
-    UITheme::printTextfOn(pros::E_TEXT_SMALL, status.x0 + 18, status.y0 + 48,
-                          UITheme::kTextMuted, UITheme::kPanel, "CURRENT STEP");
-    UITheme::printTextfOn(pros::E_TEXT_LARGE, status.x0 + 18, status.y0 + 64,
-                          UITheme::kText, UITheme::kPanel, "%s", vm.stageTitle.c_str());
-
-    UITheme::drawProgressBar(progressBar, progress, UITheme::kTeal);
-    UITheme::printTextfOn(pros::E_TEXT_SMALL, progressBar.x0, progressBar.y0 - 12,
-                          UITheme::kTextMuted, UITheme::kPanel, "BOOT PROGRESS");
-    UITheme::printTextfOn(pros::E_TEXT_MEDIUM, progressBar.x0, progressBar.y1 + 12,
-                          UITheme::kTextSoft, UITheme::kPanel, "%s", vm.detail.c_str());
-    UITheme::printTextfOn(pros::E_TEXT_LARGE, status.x1 - 42, status.y0 + 136,
-                          UITheme::kText, UITheme::kPanel, "%d%%", pct);
+    pros::screen::set_pen(kText);
+    pros::screen::print(pros::E_TEXT_LARGE, 16, 12, "PLAIN UI BUILD");
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 36, "Marker: BRAINSCREEN_V2");
+    pros::screen::set_pen(kMuted);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 72, "Stage: %s", vm.stageTitle.c_str());
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 100, "%s", vm.detail.c_str());
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 140, "Progress: %d%%", percent);
 }
 
 void renderRuntime(const RuntimeViewModel& vm) {
-    ScreenManagerUI::render(vm);
+    drawRuntimeTouchTargets();
+
+    pros::screen::set_eraser(kBackground);
+    pros::screen::erase();
+
+    const char* autonNameText = vm.auton.empty() ? "None" : vm.auton.c_str();
+    const char* statusText = vm.status.empty() ? "Ready" : vm.status.c_str();
+    const float xIn = metersToInches(vm.combinedPose.x());
+    const float yIn = metersToInches(vm.combinedPose.y());
+    const float headingDeg = headingToCompassDeg(vm.combinedPose.z());
+
+    pros::screen::set_pen(kText);
+    pros::screen::print(pros::E_TEXT_LARGE, 16, 8, "PLAIN UI BUILD");
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 32, "Marker: BRAINSCREEN_V2");
+    pros::screen::print(pros::E_TEXT_LARGE, 16, 56, "Auton: %s", autonNameText);
+    pros::screen::set_pen(kMuted);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 92, "Status: %s", statusText);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 120, "Pose X: %+.1f in", xIn);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 148, "Pose Y: %+.1f in", yIn);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 176, "Heading: %.1f deg", headingDeg);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 204, "Left tap=prev  Right tap=next");
+    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 224, "Down+B runs selected auton");
 }
 
-}  // namespace BrainScreen
+} // namespace BrainScreen

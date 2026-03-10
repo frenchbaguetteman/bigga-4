@@ -38,6 +38,13 @@ inline bool isFinitePose(const Eigen::Vector3f& v) {
     return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
 }
 
+inline Eigen::Vector3f finitePoseOr(const Eigen::Vector3f& preferred,
+                                    const Eigen::Vector3f& fallback) {
+    if (isFinitePose(preferred)) return preferred;
+    if (isFinitePose(fallback)) return fallback;
+    return Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+}
+
 // ── Angle utilities ─────────────────────────────────────────────────────────
 
 /// Wrap angle to (−π, π]

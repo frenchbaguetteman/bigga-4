@@ -100,7 +100,7 @@
 
     ---
 
-    Read the exact motion behavior of the current commands and autonomous routines, including placeholder mappings.
+    Read the exact motion behavior of the current commands and autonomous routines as they exist today.
 
     [Open Motion Reference](MOTION_REFERENCE.md)
 
@@ -117,8 +117,6 @@
 !!! warning "Current implementation caveats"
     The docs are grounded in the current code, including some unfinished areas:
 
-    - `Negative 2` currently runs the same graph as `Negative 1`
-    - `Positive 2` currently runs the same graph as `Positive 1`
     - alliance selection is UI-visible but does not yet change auton generation
     - the lift is still stubbed and does not move real hardware
     - forward odometry currently uses drive-encoder fallback because the vertical tracking wheel is disabled

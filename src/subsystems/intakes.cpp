@@ -21,10 +21,6 @@ void Intakes::spin(int voltage) {
     m_motors.moveVoltage(mv);
 }
 
-void Intakes::spinVelocity(int rpm) {
-    m_motors.moveVelocity(rpm);
-}
-
 void Intakes::stop() {
     m_motors.moveVoltage(0);
 }

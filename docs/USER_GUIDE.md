@@ -25,8 +25,6 @@ The robot is a command-based PROS V5 project with these active systems:
 Current non-obvious implementation facts:
 
 - The lift is stubbed out right now. `Lift` commands compile, but the subsystem is a no-op.
-- `Negative 2` currently runs the same command graph as `Negative 1`.
-- `Positive 2` currently runs the same command graph as `Positive 1`.
 - Alliance selection is displayed in the UI, but autonomous building does not currently branch on alliance.
 - `Down + B` can launch the selected autonomous from driver control only when the brain is not connected to competition control.
 
@@ -113,14 +111,13 @@ On the `SELECT` page:
 The ordered autonomous list comes from [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp):
 
 1. `Negative 1`
-2. `Negative 2`
-3. `Positive 1`
-4. `Positive 2`
-5. `Example Move`
-6. `Example Turn`
-7. `Example Path`
-8. `Skills`
-9. `None`
+2. `Positive 1`
+3. `Example Move`
+4. `Example Turn`
+5. `Example Path`
+6. `Example LTV`
+7. `Skills`
+8. `None`
 
 ## Hardware Map
 
@@ -194,10 +191,8 @@ The script [`uploadAllAutons.py`](../uploadAllAutons.py) rewrites that header re
 | Slot | Default routine |
 |---|---|
 | `1` | `Negative 1` |
-| `2` | `Negative 2` |
-| `3` | `Positive 1` |
-| `4` | `Positive 2` |
-| `5` | `Skills` |
+| `2` | `Positive 1` |
+| `3` | `Skills` |
 
 After it finishes, the script restores the header to `Negative 1` / `RED`.
 
@@ -311,8 +306,9 @@ The highest-impact constants for day-to-day work are:
 
 - `RAMSETE_ZETA`
 - `RAMSETE_BETA`
+- `DEFAULT_DT_COST_Q`
 
-These only matter if you explicitly build new `RamseteCommand` paths. The currently selected autonomous routines do not depend on them.
+These matter for custom profiled paths and for the built-in `Example Path` and `Example LTV` routines.
 
 ### Localization Confidence
 
@@ -322,6 +318,8 @@ These only matter if you explicitly build new `RamseteCommand` paths. The curren
 - `GPS_ERROR_THRESHOLD_in`
 - `LOC_GPS_*`
 - `LOC_MCL_*`
+- `LOC_CONTROLLER_*`
+- `PATH_TELEMETRY_*`
 
 ### Startup Reliability
 
@@ -336,9 +334,9 @@ These are worth knowing before you trust the robot blindly:
 
 - The vertical tracking wheel is disabled, so forward odometry currently uses drive encoder fallback.
 - The lift is not implemented in hardware, so skills steps that call `liftCycle()` do not move a real mechanism right now.
-- `Negative 2` and `Positive 2` are not unique routines yet.
 - Alliance does not currently change path generation or scoring logic.
 - If localization becomes non-finite, the code has several safety fallbacks, but you should still inspect the ODOM and GPS pages before a match.
+- Autonomous motion does not consume the raw fused UI pose directly; it uses a guarded controller pose that rejects abrupt fused XY jumps and falls back toward odometry if fusion goes bad.
 
 ## Troubleshooting
 

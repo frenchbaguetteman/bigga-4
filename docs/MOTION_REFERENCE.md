@@ -117,7 +117,7 @@ Purpose:
 Inputs:
 
 - `MotionProfile`
-- current fused pose source
+- guarded controller pose source
 - `RAMSETE_ZETA`
 - `RAMSETE_BETA`
 
@@ -136,13 +136,51 @@ Current default gains:
 
 Current usage note:
 
-- this command still exists in the repo, but the currently selectable autonomous routines now use EZ-style chained point moves instead of RAMSETE paths
+- the built-in `Example Path` routine uses this controller over a trapezoidal motion profile
 
 ### `LtvUnicycleCommand`
 
 Source: [`include/commands/ltvUnicycleController.h`](../include/commands/ltvUnicycleController.h)
 
-This controller exists in the repo but is not used by the currently built autons.
+Purpose:
+
+- follow a full time-parameterized motion profile with a finite-horizon LTV-LQR tracker
+
+Inputs:
+
+- `MotionProfile`
+- guarded controller pose source
+- state-cost matrix `Q` (or diagonal `DEFAULT_DT_COST_Q`)
+- optional control-cost matrix `R`
+- optional terminal cost `Qf`
+
+Behavior:
+
+- linearizes the robot-frame tracking-error dynamics along the desired trajectory
+- discretizes each step of that model
+- solves the backward Riccati recursion to precompute a gain schedule
+- applies `u = u_desired - K(t)e` at runtime
+
+Current usage note:
+
+- the built-in `Example LTV` routine uses this controller over the same trapezoidal profile shape as `Example Path`
+
+### `RelayPidAutotuner`
+
+Source: [`include/tuning/relayPidAutotuner.h`](../include/tuning/relayPidAutotuner.h)
+
+Purpose:
+
+- excite the drivetrain with a relay output
+- measure sustained oscillation from the guarded controller pose
+- estimate `Ku` and `Pu`
+- print suggested `TURN_PID` or `DISTANCE_PID` gains for copy-paste
+
+Current usage note:
+
+- `Tune Drive PID` targets `CONFIG::DISTANCE_PID`
+- `Tune Turn PID` targets `CONFIG::TURN_PID`
+- each tune prints both a conservative `NoOver` set and an aggressive `ZN` set
 
 ## Motion Profile Construction
 
@@ -182,8 +220,9 @@ The repo also includes helpers to:
 - estimate curvature and arc length
 - sample Bezier splines into a `Path`
 - build a `MotionProfile` from Bezier data or a JSON asset
+- build a trapezoidal `MotionProfile` directly from `{x, y, theta}` waypoints via [`include/motionProfiling/profileBuilder.h`](../include/motionProfiling/profileBuilder.h)
 
-The current autonomous routines do not use the checked-in JSON assets directly, and these helper builders are not currently exposed by a public header. If you want to use them in production code, add a declaration in an appropriate header or move the helper into the file where you need it.
+The current autonomous routines do not use the checked-in JSON assets directly, but the profile builders are now exposed by a public header for production use.
 
 ## Shared Autonomous Actions
 
@@ -218,10 +257,6 @@ Command sequence in chassis-facing inches:
 5. Turn to EZ absolute heading `180`.
 6. Drive back to `(-47.24, -23.62)`.
 
-### `Negative 2`
-
-- identical to `Negative 1`
-
 ### `Positive 1`
 
 Command sequence in chassis-facing inches:
@@ -235,10 +270,6 @@ Command sequence in chassis-facing inches:
 4. Outtake at `-127` for `0.5 s`.
 5. Turn to EZ absolute heading `0`.
 6. Drive back to `(47.24, -23.62)`.
-
-### `Positive 2`
-
-- identical to `Positive 1`
 
 ### `Example Move`
 
@@ -268,10 +299,19 @@ Command sequence:
 Command sequence:
 
 1. Spin intake at `96`.
-2. Chain three forward odom points relative to the current pose:
-   - `18 in` forward, `10 in` left
-   - `36 in` forward, `8 in` right
-   - `48 in` forward, `0 in` left/right
+2. Follow a trapezoidal motion profile with `RamseteCommand` through three robot-relative waypoints:
+   - `18 in` forward, `10 in` left, slight positive heading bias
+   - `36 in` forward, `8 in` right, slight negative heading bias
+   - `48 in` forward, back to the starting heading
+3. Outtake at `-127` for `0.3 s`.
+4. Return to the starting point.
+
+### `Example LTV`
+
+Command sequence:
+
+1. Spin intake at `96`.
+2. Follow the same trapezoidal motion profile as `Example Path`, but with `LtvUnicycleCommand`.
 3. Outtake at `-127` for `0.3 s`.
 4. Return to the starting point.
 
@@ -324,10 +364,12 @@ The path followers and point-motion commands do not read raw odometry directly. 
 
 That lambda returns:
 
-- the fused `combinedPose` when finite
+- a guarded controller pose built from odom plus bounded fused XY correction
 - otherwise the drivetrain odom pose
 
-So when localization is healthy, all autonomous movement is driven against the fused pose, not pure wheel odom.
+The raw fused `combinedPose` still exists for UI/debug views, but autonomous controllers do not consume it directly. Sudden fused-pose snaps are rejected or decayed back toward odometry before they reach `DriveMoveCommand`, `RotateCommand`, `RamseteCommand`, or `LtvUnicycleCommand`.
+
+Large fused corrections are not discarded permanently. The controller guard now requires them to stay stable for several localization cycles before it lets them back in gradually.
 
 ## Tolerances and Exit Behavior
 
@@ -343,8 +385,6 @@ So when localization is healthy, all autonomous movement is driven against the f
 
 These are documentation-worthy because they affect real match behavior:
 
-- No unique `Negative 2` routine yet
-- No unique `Positive 2` routine yet
 - No alliance-specific branching in auton generation
 - Lift motion is logical only until hardware is re-enabled
 - Forward odometry uses drive-encoder fallback because the vertical tracking wheel is disabled

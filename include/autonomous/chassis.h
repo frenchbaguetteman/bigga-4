@@ -6,6 +6,7 @@
 
 #include "Eigen/Core"
 #include "command/command.h"
+#include "pros/rtos.hpp"
 #include "subsystems/drivetrain.h"
 
 #include <functional>
@@ -43,11 +44,28 @@ struct movement {
 
 class Chassis {
 public:
+    enum class CoordinateFrame {
+        Global,
+        Local,
+    };
+
     Chassis(Drivetrain* drivetrain,
             std::function<Eigen::Vector3f()> poseSource,
             std::function<bool()> cancelRequested = {});
 
     void pid_targets_reset();
+    // Global uses field coordinates. Local uses a frame anchored at the stored
+    // local origin pose, with +X forward and +Y left relative to that origin.
+    void set_global_frame();
+    void set_local_frame();
+    CoordinateFrame current_frame() const;
+    void set_local_origin_here();
+    void set_local_origin(double xInches, double yInches, double headingDeg);
+    Eigen::Vector3f local_origin() const;
+    Eigen::Vector3f pose_to_global(const Eigen::Vector3f& pose,
+                                   CoordinateFrame frame = CoordinateFrame::Global) const;
+    Eigen::Vector2f point_to_global(const ez::pose& point,
+                                    CoordinateFrame frame = CoordinateFrame::Global) const;
     void drive_imu_reset();
     void drive_sensor_reset();
     void odom_xyt_set(double xInches, double yInches, double headingDeg);
@@ -90,9 +108,17 @@ private:
         OdomPath,
     };
 
+    struct MotionSnapshot {
+        bool active = false;
+        MotionKind kind = MotionKind::None;
+        Eigen::Vector3f startPose{0.0f, 0.0f, 0.0f};
+        std::vector<Eigen::Vector2f> pathPointsM;
+    };
+
     Drivetrain* m_drivetrain = nullptr;
     std::function<Eigen::Vector3f()> m_poseSource;
     std::function<bool()> m_cancelRequested;
+    mutable std::unique_ptr<pros::RecursiveMutex> m_motionMutex;
     std::unique_ptr<Command> m_motion;
     MotionKind m_motionKind = MotionKind::None;
     Eigen::Vector3f m_motionStartPose{0.0f, 0.0f, 0.0f};
@@ -100,10 +126,15 @@ private:
     std::vector<Eigen::Vector2f> m_pathPointsM;
     float m_headingZeroRad = 0.0f;
     float m_headingHoldRad = 0.0f;
+    CoordinateFrame m_coordinateFrame = CoordinateFrame::Global;
+    Eigen::Vector3f m_localOriginPose{0.0f, 0.0f, 0.0f};
 
     bool cancelled() const;
     Eigen::Vector3f currentPose() const;
-    float motionProgressMeters(const Eigen::Vector2f& current) const;
+    Eigen::Vector2f resolvePoint(const ez::pose& point) const;
+    MotionSnapshot snapshotMotion() const;
+    static float motionProgressMeters(const MotionSnapshot& motion, const Eigen::Vector2f& current);
+    void stepMotion();
 
     void startMotion(std::unique_ptr<Command> motion,
                      MotionKind kind,

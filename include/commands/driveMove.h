@@ -5,17 +5,23 @@
 #pragma once
 
 #include "command/command.h"
-#include "subsystems/drivetrain.h"
-#include "okapi/impl/control/iterative/iterativeControllerFactory.hpp"
 #include "config.h"
+#include "feedback/pid.h"
+#include "subsystems/drivetrain.h"
+#include "utils/localization_math.h"
 #include "utils/utils.h"
 #include "Eigen/Core"
 #include <cmath>
-#include <vector>
 #include <functional>
+#include <vector>
 
 class DriveMoveCommand : public Command {
 public:
+    static constexpr float kMetersToInches = 39.3701f;
+    static constexpr float kRadiansToDegrees = 180.0f / static_cast<float>(M_PI);
+    static constexpr float kPointTurnEnterDeg = 25.0f;
+    static constexpr float kPointTurnExitDeg = 8.0f;
+
     enum class MotionMode {
         PointToPoint,
         HoldHeading,
@@ -40,10 +46,8 @@ public:
         , m_headingTarget(0.0f)
         , m_driveSign(1)
         , m_maxOutput(std::fabs(maxOutput))
-        , m_distPid(okapi::IterativeControllerFactory::posPID(
-              CONFIG::DISTANCE_PID.kP, CONFIG::DISTANCE_PID.kI, CONFIG::DISTANCE_PID.kD))
-        , m_turnPid(okapi::IterativeControllerFactory::posPID(
-              CONFIG::TURN_PID.kP, CONFIG::TURN_PID.kI, CONFIG::TURN_PID.kD)) {}
+        , m_distPid(CONFIG::DISTANCE_PID)
+        , m_turnPid(CONFIG::TURN_PID) {}
 
     DriveMoveCommand(Drivetrain* drivetrain,
                      Eigen::Vector2f target,
@@ -61,20 +65,17 @@ public:
         , m_headingTarget(headingTarget)
         , m_driveSign(driveSign >= 0 ? 1 : -1)
         , m_maxOutput(std::fabs(maxOutput))
-        , m_distPid(okapi::IterativeControllerFactory::posPID(
-              CONFIG::DISTANCE_PID.kP, CONFIG::DISTANCE_PID.kI, CONFIG::DISTANCE_PID.kD))
-        , m_turnPid(okapi::IterativeControllerFactory::posPID(
-              CONFIG::TURN_PID.kP, CONFIG::TURN_PID.kI, CONFIG::TURN_PID.kD)) {}
+        , m_distPid(CONFIG::DISTANCE_PID)
+        , m_turnPid(CONFIG::TURN_PID) {}
 
     void initialize() override {
         m_distPid.reset();
         m_turnPid.reset();
-        m_distPid.setTarget(0.0);
-        m_turnPid.setTarget(0.0);
+        m_aligningToTarget = false;
     }
 
     void execute() override {
-        Eigen::Vector3f pose = m_poseSource();
+        const Eigen::Vector3f pose = samplePose();
         const Eigen::Vector2f error(m_target.x() - pose.x(), m_target.y() - pose.y());
 
         float driveError = 0.0f;
@@ -92,15 +93,34 @@ public:
             driveError = dist * static_cast<float>(m_driveSign);
         }
 
-        // OkapiLib PID: target is 0, pass -error as reading so output drives toward 0
-        double driveOut = m_distPid.step(static_cast<double>(-driveError));
-        double turnOut  = m_turnPid.step(
-            static_cast<double>(-utils::angleDifference(targetAngle, pose.z())));
+        const float driveErrorInches = driveError * kMetersToInches;
+        const float turnErrorRadians = utils::angleDifference(targetAngle, pose.z());
+        const float turnErrorDegrees = turnErrorRadians * kRadiansToDegrees;
 
-        // OkapiLib PID outputs [-1, 1], scale to [-maxOutput, maxOutput]
+        float driveOut = m_distPid.calculate(0.0f, driveErrorInches);
+        const float turnOut = m_turnPid.calculate(0.0f, turnErrorDegrees);
+        const float absTurnErrorDegrees = std::fabs(turnErrorDegrees);
+        const float alignmentScale = std::max(0.0f, std::cos(std::fabs(turnErrorRadians)));
+
+        if (m_motionMode == MotionMode::PointToPoint) {
+            if (absTurnErrorDegrees >= kPointTurnEnterDeg) {
+                m_aligningToTarget = true;
+            } else if (absTurnErrorDegrees <= kPointTurnExitDeg) {
+                m_aligningToTarget = false;
+            }
+
+            if (m_aligningToTarget) {
+                driveOut = 0.0f;
+            }
+        }
+
+        driveOut *= alignmentScale;
+
+        // Okapi yaw is clockwise-positive, while our internal heading error is
+        // counterclockwise-positive.
         m_drivetrain->arcade(
-            utils::clamp(static_cast<float>(driveOut * m_maxOutput), -m_maxOutput, m_maxOutput),
-            utils::clamp(static_cast<float>(turnOut * m_maxOutput), -m_maxOutput, m_maxOutput));
+            utils::clamp(driveOut, -m_maxOutput, m_maxOutput),
+            -utils::clamp(turnOut, -m_maxOutput, m_maxOutput));
     }
 
     void end(bool /*interrupted*/) override {
@@ -108,7 +128,7 @@ public:
     }
 
     bool isFinished() override {
-        Eigen::Vector3f pose = m_poseSource();
+        const Eigen::Vector3f pose = samplePose();
         const Eigen::Vector2f error(m_target.x() - pose.x(), m_target.y() - pose.y());
         return error.norm() < m_tolerance;
     }
@@ -118,6 +138,14 @@ public:
     }
 
 private:
+    Eigen::Vector3f samplePose() const {
+        const Eigen::Vector3f rawPose =
+            m_poseSource ? m_poseSource() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        const Eigen::Vector3f odomPose =
+            m_drivetrain ? m_drivetrain->getOdomPose() : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        return LocMath::finitePoseOr(rawPose, odomPose);
+    }
+
     Drivetrain* m_drivetrain;
     Eigen::Vector2f m_target;
     std::function<Eigen::Vector3f()> m_poseSource;
@@ -126,6 +154,7 @@ private:
     float m_headingTarget;
     int m_driveSign;
     float m_maxOutput;
-    okapi::IterativePosPIDController m_distPid;
-    okapi::IterativePosPIDController m_turnPid;
+    bool m_aligningToTarget = false;
+    PID m_distPid;
+    PID m_turnPid;
 };

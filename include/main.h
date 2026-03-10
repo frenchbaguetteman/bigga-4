@@ -44,6 +44,7 @@
 #include "motionProfiling/path.h"
 #include "motionProfiling/bezier.h"
 #include "motionProfiling/motionProfile.h"
+#include "motionProfiling/profileBuilder.h"
 #include "motionProfiling/pathCommand.h"
 
 // Localization
@@ -70,7 +71,6 @@
 
 // Autonomous
 #include "autonomous/autons.h"
-#include "autonomous/autonCommands.h"
 
 #ifdef __cplusplus
 extern "C" {

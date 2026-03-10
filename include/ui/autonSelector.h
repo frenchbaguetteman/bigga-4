@@ -17,18 +17,14 @@ public:
     static void nextAuton();
     static void prevAuton();
 
-    /// Flip the alliance between RED and BLUE.
-    static void toggleAlliance();
-    static void selectAlliance(Alliance alliance);
     static void selectAuton(Auton auton);
 
     /// Read the current selection.
-    static Auton    getAuton();
-    static Alliance getAlliance();
+    static Auton getAuton();
+    static const AutonEntry* getAutonEntry();
 
     /// Human-readable strings for the current selection.
     static std::string getAutonStr();
-    static std::string getAllianceStr();
 
     /// Render the runtime screen model directly.
     /// @param pose  current robot pose (x, y, θ in radians)
@@ -43,6 +39,5 @@ public:
                            const std::string& status = "");
 
 private:
-    static inline int      s_index    = 0;
-    static inline Alliance s_alliance = Alliance::RED;
+    static inline const AutonEntry* s_auton = nullptr;
 };

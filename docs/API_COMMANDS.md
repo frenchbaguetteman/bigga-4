@@ -94,8 +94,8 @@ public:
 The builder-style helpers on `Command` allocate wrappers on the heap:
 
 ```cpp
-auto cmd = (new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource))
-    ->alongWith(new IntakeSpinCommand(ctx.intakes, 127))
+auto cmd = (new RamseteCommand(&ctx.drivetrain, profile, ctx.poseSource))
+    ->alongWith(new IntakeSpinCommand(&ctx.intakes, 127))
     ->withTimeout(1.8f);
 ```
 

@@ -16,9 +16,6 @@ public:
     /** Spin at the given voltage (−127..127). */
     void spin(int voltage);
 
-    /** Spin at a given velocity (RPM). */
-    void spinVelocity(int rpm);
-
     /** Stop and brake. */
     void stop();
 

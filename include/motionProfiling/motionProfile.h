@@ -33,11 +33,13 @@ public:
                   int sampleCount = 200)
         : m_path(path), m_velProfile(velProfile)
     {
+        const int clampedSampleCount = std::max(1, sampleCount);
         float totalT = velProfile.totalTime().convert(second);
-        float dt = totalT / sampleCount;
+        float dt = totalT / static_cast<float>(clampedSampleCount);
         float totalLen = path.totalLength();
+        m_samples.reserve(static_cast<size_t>(clampedSampleCount) + 1U);
 
-        for (int i = 0; i <= sampleCount; ++i) {
+        for (int i = 0; i <= clampedSampleCount; ++i) {
             float t = i * dt;
             QTime qt(t);
             float dist = velProfile.distanceAt(qt).convert(meter);
@@ -86,7 +88,8 @@ public:
 
         ProfileState result;
         result.pose = a.pose + (b.pose - a.pose) * alpha;
-        result.pose.z() = a.pose.z() + utils::angleDifference(b.pose.z(), a.pose.z()) * alpha;
+        result.pose.z() = utils::angleWrap(
+            a.pose.z() + utils::angleDifference(b.pose.z(), a.pose.z()) * alpha);
         result.linearVelocity     = a.linearVelocity     + alpha * (b.linearVelocity     - a.linearVelocity);
         result.angularVelocity    = a.angularVelocity    + alpha * (b.angularVelocity    - a.angularVelocity);
         result.linearAcceleration = a.linearAcceleration  + alpha * (b.linearAcceleration - a.linearAcceleration);

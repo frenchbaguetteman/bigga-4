@@ -132,18 +132,30 @@ public:
 
     void initialize() override {
         m_done = false;
+        m_finished.assign(m_commands.size(), false);
         for (auto* c : m_commands) c->initialize();
     }
 
     void execute() override {
-        for (auto* c : m_commands) {
-            c->execute();
-            if (c->isFinished()) { m_done = true; }
+        for (size_t i = 0; i < m_commands.size(); ++i) {
+            if (m_finished[i]) continue;
+
+            m_commands[i]->execute();
+            if (m_commands[i]->isFinished()) {
+                m_commands[i]->end(false);
+                m_finished[i] = true;
+                m_done = true;
+                break;
+            }
         }
     }
 
     void end(bool interrupted) override {
-        for (auto* c : m_commands) c->end(true);
+        for (size_t i = 0; i < m_commands.size(); ++i) {
+            if (!m_finished[i]) {
+                m_commands[i]->end(true);
+            }
+        }
     }
 
     bool isFinished() override { return m_done; }
@@ -158,6 +170,7 @@ public:
 
 private:
     std::vector<Command*> m_commands;
+    std::vector<bool> m_finished;
     bool m_done = false;
 };
 
@@ -170,12 +183,22 @@ public:
 
     ~DeadlineCommand() override { delete m_inner; }
 
-    void initialize() override { m_startTime = pros::millis(); m_inner->initialize(); }
+    void initialize() override {
+        m_startTime = pros::millis();
+        m_timedOut = false;
+        m_inner->initialize();
+    }
     void execute() override    { m_inner->execute(); }
-    void end(bool i) override  { m_inner->end(i); }
+    void end(bool interrupted) override {
+        m_inner->end(interrupted || m_timedOut);
+    }
     bool isFinished() override {
-        return m_inner->isFinished() ||
-               (pros::millis() - m_startTime) / 1000.0f >= m_timeout;
+        if (m_inner->isFinished()) {
+            return true;
+        }
+
+        m_timedOut = (pros::millis() - m_startTime) / 1000.0f >= m_timeout;
+        return m_timedOut;
     }
     std::vector<Subsystem*> getRequirements() override { return m_inner->getRequirements(); }
 
@@ -183,6 +206,7 @@ private:
     Command* m_inner;
     float m_timeout;
     uint32_t m_startTime = 0;
+    bool m_timedOut = false;
 };
 
 // ── ConditionalFinish wrapper ───────────────────────────────────────────────
@@ -194,15 +218,28 @@ public:
 
     ~ConditionalFinishCommand() override { delete m_inner; }
 
-    void initialize() override { m_inner->initialize(); }
+    void initialize() override {
+        m_conditionMet = false;
+        m_inner->initialize();
+    }
     void execute() override    { m_inner->execute(); }
-    void end(bool i) override  { m_inner->end(i); }
-    bool isFinished() override { return m_inner->isFinished() || m_cond(); }
+    void end(bool interrupted) override {
+        m_inner->end(interrupted || m_conditionMet);
+    }
+    bool isFinished() override {
+        if (m_inner->isFinished()) {
+            return true;
+        }
+
+        m_conditionMet = m_cond();
+        return m_conditionMet;
+    }
     std::vector<Subsystem*> getRequirements() override { return m_inner->getRequirements(); }
 
 private:
     Command* m_inner;
     std::function<bool()> m_cond;
+    bool m_conditionMet = false;
 };
 
 // ── Builder method implementations ──────────────────────────────────────────

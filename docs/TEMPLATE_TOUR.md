@@ -56,6 +56,7 @@ Examples from this repo:
 - `DriveMoveCommand`: drive to an `(x, y)` target
 - `RotateCommand`: turn to a heading
 - `RamseteCommand`: follow a time-parameterized path
+- `LtvUnicycleCommand`: follow a time-parameterized path with velocity-varying gains
 - `IntakeSpinCommand`: run the intake until cancelled
 
 Commands declare which subsystem they own, so the scheduler can prevent conflicts.
@@ -65,19 +66,19 @@ Commands declare which subsystem they own, so the scheduler can prevent conflict
 The builder helpers on `Command` let you chain behaviors:
 
 ```cpp
-new RotateCommand(ctx.drivetrain, kPi, ctx.poseSource);
+new RotateCommand(&ctx.drivetrain, kPi, ctx.poseSource);
 
-(new RamseteCommand(ctx.drivetrain, profile, ctx.poseSource))
-    ->alongWith(new IntakeSpinCommand(ctx.intakes, 127));
+(new RamseteCommand(&ctx.drivetrain, profile, ctx.poseSource))
+    ->alongWith(new IntakeSpinCommand(&ctx.intakes, 127));
 ```
 
 And command groups let you build multi-step routines:
 
 ```cpp
 return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-    new DriveMoveCommand(ctx.drivetrain, forward, ctx.poseSource),
+    new DriveMoveCommand(&ctx.drivetrain, forward, ctx.poseSource),
     new WaitCommand(0.2f),
-    new DriveMoveCommand(ctx.drivetrain, home, ctx.poseSource),
+    new DriveMoveCommand(&ctx.drivetrain, home, ctx.poseSource),
 });
 ```
 
@@ -90,7 +91,7 @@ If you are used to EZ-Template, these are the closest equivalents in this repo:
 | Global chassis object | `Drivetrain` subsystem |
 | `pid_drive_set(...)` | `DriveMoveCommand` |
 | `pid_turn_set(...)` | `RotateCommand` |
-| Odom/path movement | `RamseteCommand` + `MotionProfile` |
+| Odom/path movement | `RamseteCommand` or `LtvUnicycleCommand` + `MotionProfile` |
 | Auton selector pages | `AutonSelector` + `BrainScreen` |
 | Simple helper functions for auton | `shared::*` helpers in `include/autonomous/sharedCommands.h` |
 
@@ -102,10 +103,9 @@ Autonomous code receives a single context object:
 
 ```cpp
 struct AutonBuildContext {
-    Drivetrain* drivetrain = nullptr;
-    Intakes* intakes = nullptr;
-    Lift* lift = nullptr;
-    Solenoids* solenoids = nullptr;
+    Drivetrain& drivetrain;
+    Intakes& intakes;
+    Lift& lift;
     std::function<Eigen::Vector3f()> poseSource;
 };
 ```
@@ -114,6 +114,7 @@ That keeps auton builders clean:
 
 - the drivetrain and mechanisms are already injected
 - localization is exposed through `poseSource`
+- `poseSource` is already guarded against sudden fusion snaps before motion code sees it
 - builders return a new top-level `Command`
 
 ## Coordinate System
@@ -143,14 +144,13 @@ This matters when you author waypoints. If a point looks mirrored or rotated, ch
 The auton selector currently exposes these routines:
 
 1. `Negative 1`
-2. `Negative 2`
-3. `Positive 1`
-4. `Positive 2`
-5. `Example Move`
-6. `Example Turn`
-7. `Example Path`
-8. `Skills`
-9. `None`
+2. `Positive 1`
+3. `Example Move`
+4. `Example Turn`
+5. `Example Path`
+6. `Example LTV`
+7. `Skills`
+8. `None`
 
 The example routines are intentional. They make this repo much easier to learn because they isolate one motion style at a time.
 

@@ -6,59 +6,68 @@
  *   • command-scheduler loop  (10 ms)  — advances the command graph
  *   • screen-update loop      (50 ms)  — redraws the brain LCD with pose + auton
  *
- * autonomous() schedules the selected autonCommand.
- * opcontrol()  cancels it and runs arcade drive + trigger bindings.
+ * autonomous() runs the selected auton directly in the current task.
+ * opcontrol() runs arcade drive + trigger bindings, including DOWN+B to call
+ * the selected autonomous inline.
  */
 #include "main.h"
+#include "localization/controllerPoseGuard.h"
 #include "localization/localizationFusion.h"
+#include "tuning/relayPidAutotuner.h"
 #include "ui/brainScreen.h"
 #include "ui/screenManager.h"
+#include <cstdarg>
 #include <cstdio>
 #include <cmath>
 #include <string>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <vector>
 
-// ── RAII mutex guard for PROS (take/give) ───────────────────────────────────
-class MutexGuard {
-public:
-    explicit MutexGuard(pros::Mutex& mtx) : m_mtx(mtx) { m_mtx.take(); }
-    ~MutexGuard() { m_mtx.give(); }
-    MutexGuard(const MutexGuard&) = delete;
-    MutexGuard& operator=(const MutexGuard&) = delete;
-private:
-    pros::Mutex& m_mtx;
+namespace {
+
+struct PoseState {
+    float x;
+    float y;
+    float z;
 };
 
-static Drivetrain drivetrain;
-static Intakes intakes;
-static Lift lift;
-static pros::adi::DigitalOut selector(CONFIG::SELECT_PORT);
-static pros::adi::DigitalOut top(CONFIG::TOP_PORT);
-static pros::adi::DigitalOut tongue(CONFIG::TONGUE_PORT);
-static pros::adi::DigitalOut wing(CONFIG::WING_PORT);
+} // namespace
+
+static Drivetrain* drivetrain;
+static Intakes* intakes;
+static Lift* lift;
+static pros::adi::DigitalOut* selector;
+static pros::adi::DigitalOut* top;
+static pros::adi::DigitalOut* tongue;
+static pros::adi::DigitalOut* wing;
 
 static ParticleFilter* particleFilter = nullptr;
 static LocalizationFusion* fusion = nullptr;
 
 // ── Shared state protected by locMutex ──────────────────────────────────────
-static pros::Mutex locMutex;
-static Eigen::Vector3f combinedPose(0.0f, 0.0f, 0.0f);
-static std::vector<Eigen::Vector2f> sharedParticleSample;
+static pros::Mutex* locMutex;
+static PoseState combinedPoseState;
+static PoseState controllerPoseState;
+static ControllerPoseGuard* controllerPoseGuard;
 
-static std::unique_ptr<Command> autonCommand;
-
-static std::function<Eigen::Vector3f()> poseSource;
-static std::unique_ptr<pros::Gps> uiGps;
-static std::unique_ptr<pros::Distance> uiDistLeft;
-static std::unique_ptr<pros::Distance> uiDistRight;
-static std::unique_ptr<pros::Distance> uiDistFront;
-static std::unique_ptr<pros::Distance> uiDistBack;
+static pros::Gps* uiGps;
+static pros::Distance* uiDistLeft;
+static pros::Distance* uiDistRight;
+static pros::Distance* uiDistFront;
+static pros::Distance* uiDistBack;
+static pros::Task* screenTaskHandle;
+static pros::Task* schedulerTaskHandle;
 static uint32_t firstInitScreenMs = 0;
+static std::FILE* startupLogFile = nullptr;
+static bool startupLogOpened = false;
+static uint32_t startupLogIndex = 0;
 
-static std::string screenStatus = "";
+static char screenStatus[64];
+static constexpr uint32_t SCREEN_NOTIFY_PERIOD_ms = 50;
+static constexpr uint32_t SCREEN_NOTIFY_FALLBACK_ms = 250;
 
 // GpsPoseSample is now defined in LocalizationFusion.
 using GpsPoseSample = LocalizationFusion::GpsPoseSample;
@@ -72,23 +81,91 @@ static float wrapAngleRad(float angleRad) {
     return LocMath::wrapAngle(angleRad);
 }
 
-static BrainScreen::RuntimeViewModel::DistanceSensorViewModel sampleDistanceSensor(
-    const char* label,
-    const std::unique_ptr<pros::Distance>& sensor) {
-    BrainScreen::RuntimeViewModel::DistanceSensorViewModel sample;
-    sample.label = label;
-    if (!sensor) return sample;
+static Eigen::Vector3f loadPose(const PoseState& state) {
+    return Eigen::Vector3f(state.x, state.y, state.z);
+}
 
-    const int rawMm = sensor->get_distance();
-    if (rawMm <= 0 || rawMm >= 9999) {
-        sample.confidence = sensor->get_confidence();
-        return sample;
+static void storePose(PoseState* state, const Eigen::Vector3f& pose) {
+    state->x = pose.x();
+    state->y = pose.y();
+    state->z = pose.z();
+}
+
+static const char* currentScreenStatus() {
+    return screenStatus[0] == '\0' ? "Ready" : screenStatus;
+}
+
+static void setScreenStatus(const char* status) {
+    if (status == nullptr || status[0] == '\0') {
+        screenStatus[0] = '\0';
+        return;
+    }
+    std::snprintf(screenStatus, sizeof(screenStatus), "%s", status);
+}
+
+static Eigen::Vector3f currentControllerPose() {
+    const Eigen::Vector3f odomPose = drivetrain
+        ? drivetrain->getOdomPose()
+        : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+
+    if (locMutex) {
+        std::scoped_lock guard(*locMutex);
+        const Eigen::Vector3f pose = loadPose(controllerPoseState);
+        return LocMath::isFinitePose(pose) ? pose : odomPose;
     }
 
-    sample.valid = true;
-    sample.rangeM = static_cast<float>(rawMm) / 1000.0f;
-    sample.confidence = sensor->get_confidence();
-    return sample;
+    const Eigen::Vector3f pose = loadPose(controllerPoseState);
+    return LocMath::isFinitePose(pose) ? pose : odomPose;
+}
+
+static void openStartupLog() {
+    if (startupLogOpened) return;
+    startupLogOpened = true;
+    startupLogFile = std::fopen("/usd/startup.log", "w");
+    if (startupLogFile) {
+        std::setvbuf(startupLogFile, nullptr, _IONBF, 0);
+    }
+}
+
+static void startupLog(const char* fmt, ...) {
+    openStartupLog();
+
+    char message[192];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+
+    const unsigned long now = static_cast<unsigned long>(pros::millis());
+    std::printf("[TRACE %03lu @ %lums] %s\n",
+                static_cast<unsigned long>(++startupLogIndex),
+                now,
+                message);
+    if (startupLogFile) {
+        std::fprintf(startupLogFile,
+                     "[TRACE %03lu @ %lums] %s\n",
+                     static_cast<unsigned long>(startupLogIndex),
+                     now,
+                     message);
+        std::fflush(startupLogFile);
+    }
+}
+
+static void ensureLocMutex() {
+    if (!locMutex) {
+        locMutex = new pros::Mutex();
+    }
+}
+
+static bool subsystemsReady() {
+    return drivetrain && intakes && lift && selector && top && tongue && wing;
+}
+
+static void requestScreenRefresh() {
+    if (screenTaskHandle &&
+        static_cast<pros::task_t>(*screenTaskHandle) != nullptr) {
+        screenTaskHandle->notify();
+    }
 }
 
 static std::optional<GpsPoseSample> poseSampleFromReading(
@@ -99,7 +176,7 @@ static std::optional<GpsPoseSample> poseSampleFromReading(
         GpsLocalization::robotCenterFromSensorPose(
             reading.sensorFieldPos,
             reading.robotHeadingRad,
-            CONFIG::GPS_OFFSET);
+            CONFIG::gpsOffset());
     if (!robotCenter) {
         return std::nullopt;
     }
@@ -125,6 +202,24 @@ static std::optional<GpsPoseSample> sampleGpsPose() {
     return poseSampleFromReading(*reading);
 }
 
+static BrainScreen::RuntimeViewModel::DistanceSensorViewModel sampleDistanceSensor(
+    const char* label,
+    pros::Distance* sensor) {
+    BrainScreen::RuntimeViewModel::DistanceSensorViewModel sample;
+    sample.label = label;
+    if (!sensor) return sample;
+
+    const int rawMm = sensor->get_distance();
+    sample.confidence = sensor->get_confidence();
+    if (rawMm <= 0 || rawMm >= 9999) {
+        return sample;
+    }
+
+    sample.valid = true;
+    sample.rangeM = static_cast<float>(rawMm) / 1000.0f;
+    return sample;
+}
+
 // computeCombinedPose() logic is now in LocalizationFusion::update().
 
 static void renderInitStage(float progress,
@@ -136,34 +231,93 @@ static void renderInitStage(float progress,
         firstInitScreenMs = pros::millis();
     }
 
-    std::printf("[BOOT] %3d%% %s", pct, stage.c_str());
-    if (!detail.empty()) {
-        std::printf(" - %s", detail.c_str());
-    }
-    std::printf("\n");
+    startupLog("boot %3d%% %s%s%s",
+               pct,
+               stage.c_str(),
+               detail.empty() ? "" : " - ",
+               detail.empty() ? "" : detail.c_str());
 
-    pros::screen::set_eraser(0x00000000);
-    pros::screen::erase();
-    pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_LARGE, 16, 24, "69580A BOOT");
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 64, "Stage: %s", stage.c_str());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 92, "Detail: %s",
-                        detail.empty() ? "..." : detail.c_str());
-    pros::screen::print(pros::E_TEXT_MEDIUM, 16, 132, "Progress: %d%%", pct);
-    pros::screen::set_pen(0x00314A5D);
-    pros::screen::draw_rect(16, 168, 463, 192);
-    pros::screen::set_pen(0x001FC8B0);
-    const int barRight = 18 + static_cast<int>(442.0f * clampedProgress);
-    if (barRight >= 18) {
-        pros::screen::fill_rect(18, 170, std::min(460, barRight), 190);
+    BrainScreen::InitViewModel vm;
+    vm.progress = clampedProgress;
+    vm.stageTitle = stage;
+    vm.detail = detail.empty() ? "..." : detail;
+    BrainScreen::renderInit(vm);
+}
+
+static BrainScreen::RuntimeViewModel captureRuntimeViewModel() {
+    static Eigen::Vector3f lastFiniteCombined(0.0f, 0.0f, 0.0f);
+
+    BrainScreen::RuntimeViewModel vm;
+    vm.selectedAuton = AutonSelector::getAuton();
+    vm.auton = std::string(autonName(vm.selectedAuton));
+    vm.status = currentScreenStatus();
+    char autotuneStatus[96];
+    tuning::RelayPidAutotuner::copyStatus(autotuneStatus, sizeof(autotuneStatus));
+    if (autotuneStatus[0] != '\0') {
+        vm.status = autotuneStatus;
     }
+
+    if (drivetrain) {
+        vm.pureOdomPose = drivetrain->getOdomPose();
+        if (!LocMath::isFinitePose(vm.pureOdomPose)) {
+            vm.pureOdomPose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        }
+    }
+    {
+        if (locMutex) {
+            std::scoped_lock guard(*locMutex);
+            vm.combinedPose = loadPose(combinedPoseState);
+        } else {
+            vm.combinedPose = loadPose(combinedPoseState);
+        }
+    }
+
+    if (!LocMath::isFinitePose(vm.combinedPose)) {
+        vm.combinedPose = vm.pureOdomPose;
+    }
+    if (LocMath::isFinitePose(vm.combinedPose)) {
+        lastFiniteCombined = vm.combinedPose;
+    } else {
+        vm.combinedPose = lastFiniteCombined;
+    }
+
+    vm.pureMclPose = particleFilter ? particleFilter->getPrediction() : vm.pureOdomPose;
+    if (!LocMath::isFinitePose(vm.pureMclPose)) {
+        vm.pureMclPose = vm.pureOdomPose;
+    }
+
+    if (auto gpsSample = sampleGpsPose()) {
+        vm.gpsPose = gpsSample->pose;
+        vm.gpsPoseValid = true;
+        vm.gpsErrorM = gpsSample->errorM;
+    }
+
+    vm.pfActiveSensors = particleFilter ? particleFilter->getLastActiveSensorCount() : 0;
+    vm.pfAbsoluteSensors = particleFilter ? particleFilter->getLastActiveAbsoluteSensorCount() : 0;
+    vm.pfUsedMeasurements = particleFilter ? particleFilter->lastUpdateUsedMeasurements() : false;
+    vm.pfDidResample = particleFilter ? particleFilter->lastUpdateDidResample() : false;
+    vm.pfEss = particleFilter ? particleFilter->getLastEss() : 0.0;
+    vm.pfAverageWeight = particleFilter ? particleFilter->getLastAverageWeight() : 0.0;
+    vm.pfRecoveryFraction = particleFilter ? particleFilter->getLastRecoveryFraction() : 0.0f;
+
+    vm.distanceSensors[0] = sampleDistanceSensor("LEFT", uiDistLeft);
+    vm.distanceSensors[1] = sampleDistanceSensor("RIGHT", uiDistRight);
+    vm.distanceSensors[2] = sampleDistanceSensor("FRONT", uiDistFront);
+    vm.distanceSensors[3] = sampleDistanceSensor("BACK", uiDistBack);
+
+    vm.pose = vm.combinedPose;
+    return vm;
+}
+
+static void renderSimpleRuntimeScreen(const BrainScreen::RuntimeViewModel& vm) {
+    BrainScreen::renderRuntime(vm);
 }
 
 void update_loop() {
+    startupLog("update_loop entry");
     uint32_t lastDebugMs = 0;
-    int particleSampleTick = 0;
-    constexpr int PARTICLE_SAMPLE_PERIOD = 5;      // every 5 ticks ≈ 50 ms
-    constexpr size_t PARTICLE_SAMPLE_STRIDE = 25;   // 500/25 = 20 dots
+    uint32_t lastGuardLogMs = 0;
+    uint32_t lastScreenNotifyMs = 0;
 
     while (true) {
         CommandScheduler::run();
@@ -172,23 +326,27 @@ void update_loop() {
         }
 
         // ── Fusion ──────────────────────────────────────────────────────
-        Eigen::Vector3f fusedPose = fusion
+        const Eigen::Vector3f odomPose = drivetrain
+            ? drivetrain->getOdomPose()
+            : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        const Eigen::Vector3f fusedPose = fusion
             ? fusion->update()
-            : drivetrain.getOdomPose();
+            : odomPose;
+        ControllerPoseGuard::UpdateResult controllerUpdate;
+        controllerUpdate.pose = LocMath::finitePoseOr(fusedPose, odomPose);
+        if (controllerPoseGuard) {
+            controllerUpdate = controllerPoseGuard->update(fusedPose, odomPose);
+        }
 
         // ── Publish shared state under mutex ────────────────────────────
         {
-            MutexGuard guard(locMutex);
-            combinedPose = fusedPose;
-
-            if (++particleSampleTick >= PARTICLE_SAMPLE_PERIOD && particleFilter) {
-                particleSampleTick = 0;
-                const auto all = particleFilter->getParticles();
-                sharedParticleSample.clear();
-                sharedParticleSample.reserve(all.size() / PARTICLE_SAMPLE_STRIDE + 1);
-                for (size_t i = 0; i < all.size(); i += PARTICLE_SAMPLE_STRIDE) {
-                    sharedParticleSample.emplace_back(all[i].x(), all[i].y());
-                }
+            if (locMutex) {
+                std::scoped_lock guard(*locMutex);
+                storePose(&combinedPoseState, fusedPose);
+                storePose(&controllerPoseState, controllerUpdate.pose);
+            } else {
+                storePose(&combinedPoseState, fusedPose);
+                storePose(&controllerPoseState, controllerUpdate.pose);
             }
         }
 
@@ -196,7 +354,7 @@ void update_loop() {
             uint32_t now = pros::millis();
             if (now - lastDebugMs >= CONFIG::ODOM_DEBUG_LOG_EVERY_ms) {
                 lastDebugMs = now;
-                float imuH = drivetrain.getHeading();
+                float imuH = drivetrain ? drivetrain->getHeading() : 0.0f;
                 float gpsX = 0, gpsY = 0, gpsH = 0, gpsErr = -1.0f;
                 bool gpsOk = false;
                 if (auto gpsSample = sampleGpsPose()) {
@@ -206,9 +364,13 @@ void update_loop() {
                     gpsErr = gpsSample->errorM;
                     gpsOk = true;
                 }
-                Eigen::Vector2f odomdelta = drivetrain.getLastStepDisplacementDebug();
+                Eigen::Vector2f odomdelta = drivetrain
+                    ? drivetrain->getLastStepDisplacementDebug()
+                    : Eigen::Vector2f(0.0f, 0.0f);
                 float deltaLen = odomdelta.norm();
-                auto odom = drivetrain.getOdomPose();
+                auto odom = drivetrain
+                    ? drivetrain->getOdomPose()
+                    : Eigen::Vector3f(0.0f, 0.0f, 0.0f);
                 auto pf   = particleFilter ? particleFilter->getPrediction()
                                            : Eigen::Vector3f(0, 0, 0);
                 const Eigen::Vector2f corr = fusion
@@ -217,15 +379,56 @@ void update_loop() {
 
                 std::printf("[LOC] odom_delta=%.4f imu=%.1fdeg gps(%c)=(%.3f,%.3f,%.1fdeg,err=%.3f) "
                             "odom=(%.3f,%.3f,%.1fdeg) pf=(%.3f,%.3f,%.1fdeg) "
-                            "comb=(%.3f,%.3f,%.1fdeg) corr=(%.3f,%.3f)|%.3f\n",
+                            "comb=(%.3f,%.3f,%.1fdeg) ctrl=(%.3f,%.3f,%.1fdeg) "
+                            "corr=(%.3f,%.3f)|%.3f ctrlcorr=(%.3f,%.3f)|%.3f\n",
                     deltaLen,
                     headingToCompassDeg(imuH),
                     gpsOk ? 'Y' : 'N', gpsX, gpsY, headingToCompassDeg(gpsH), gpsErr,
                     odom.x(), odom.y(), headingToCompassDeg(odom.z()),
                     pf.x(), pf.y(), headingToCompassDeg(pf.z()),
                     fusedPose.x(), fusedPose.y(), headingToCompassDeg(fusedPose.z()),
-                    corr.x(), corr.y(), corr.norm());
+                    controllerUpdate.pose.x(), controllerUpdate.pose.y(),
+                    headingToCompassDeg(controllerUpdate.pose.z()),
+                    corr.x(), corr.y(), corr.norm(),
+                    controllerUpdate.correction.x(),
+                    controllerUpdate.correction.y(),
+                    controllerUpdate.correction.norm());
             }
+        }
+
+        const uint32_t now = pros::millis();
+        if ((controllerUpdate.rejectedSnap ||
+             controllerUpdate.acceptedStableJump ||
+             controllerUpdate.decayingToOdom ||
+             controllerUpdate.usedOdomFallback) &&
+            now - lastGuardLogMs >= 250) {
+            lastGuardLogMs = now;
+            std::printf(
+                "[LOC_GUARD] fused_ok=%c snap_reject=%c stable_accept=%c stable_cycles=%d "
+                "decay=%c odom_fallback=%c target=(%.3f,%.3f)|%.3f applied=(%.3f,%.3f)|%.3f\n",
+                LocMath::isFinitePose(fusedPose) ? 'Y' : 'N',
+                controllerUpdate.rejectedSnap ? 'Y' : 'N',
+                controllerUpdate.acceptedStableJump ? 'Y' : 'N',
+                controllerUpdate.stableJumpCycles,
+                controllerUpdate.decayingToOdom ? 'Y' : 'N',
+                controllerUpdate.usedOdomFallback ? 'Y' : 'N',
+                controllerUpdate.targetCorrection.x(),
+                controllerUpdate.targetCorrection.y(),
+                controllerUpdate.targetCorrection.norm(),
+                controllerUpdate.correction.x(),
+                controllerUpdate.correction.y(),
+                controllerUpdate.correction.norm());
+        }
+
+        const bool urgentScreenRefresh =
+            controllerUpdate.rejectedSnap ||
+            controllerUpdate.acceptedStableJump ||
+            controllerUpdate.decayingToOdom ||
+            controllerUpdate.usedOdomFallback;
+        if (now - lastScreenNotifyMs >= SCREEN_NOTIFY_PERIOD_ms ||
+            urgentScreenRefresh) {
+            lastScreenNotifyMs = now;
+            requestScreenRefresh();
         }
 
         pros::delay(10);
@@ -233,73 +436,41 @@ void update_loop() {
 }
 
 void screen_update_loop() {
-    Eigen::Vector3f lastFiniteCombined(0.0f, 0.0f, 0.0f);
+    startupLog("screen_update_loop entry");
     while (true) {
-        BrainScreen::RuntimeViewModel vm;
-
-        vm.selectedAuton = AutonSelector::getAuton();
-        vm.selectedAlliance = AutonSelector::getAlliance();
-        vm.auton = std::string(autonName(vm.selectedAuton));
-        vm.alliance = std::string(allianceName(vm.selectedAlliance));
-        vm.status = screenStatus;
-
-        vm.pureOdomPose = drivetrain.getOdomPose();
-        if (!LocMath::isFinitePose(vm.pureOdomPose)) {
-            std::printf("[LOC] non-finite pureOdomPose, forcing zero\n");
-            vm.pureOdomPose = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
-        }
-
-        vm.pureMclPose = particleFilter ? particleFilter->getPrediction()
-                                        : vm.pureOdomPose;
-        if (!LocMath::isFinitePose(vm.pureMclPose)) {
-            std::printf("[LOC] non-finite pureMclPose, fallback to odom\n");
-            vm.pureMclPose = vm.pureOdomPose;
-        }
-
-        // ── Snapshot shared state under mutex ───────────────────────────
-        {
-            MutexGuard guard(locMutex);
-            vm.combinedPose = combinedPose;
-            vm.pfParticleSample = sharedParticleSample;
-        }
-
-        if (!LocMath::isFinitePose(vm.combinedPose)) {
-            vm.combinedPose = vm.pureOdomPose;
-        }
-        if (LocMath::isFinitePose(vm.combinedPose)) {
-            lastFiniteCombined = vm.combinedPose;
-        } else {
-            vm.combinedPose = lastFiniteCombined;
-        }
-        vm.pose = vm.combinedPose;
-
-        if (auto gpsSample = sampleGpsPose()) {
-            vm.gpsPose = gpsSample->pose;
-            vm.gpsPoseValid = true;
-            vm.gpsErrorM = gpsSample->errorM;
-        }
-
-        vm.pfActiveSensors = particleFilter ? particleFilter->getLastActiveSensorCount() : 0;
-        vm.pfAbsoluteSensors = particleFilter ? particleFilter->getLastActiveAbsoluteSensorCount() : 0;
-        vm.pfUsedMeasurements = particleFilter ? particleFilter->lastUpdateUsedMeasurements() : false;
-        vm.pfDidResample = particleFilter ? particleFilter->lastUpdateDidResample() : false;
-        vm.pfEss = particleFilter ? particleFilter->getLastEss() : 0.0;
-        vm.pfAverageWeight = particleFilter ? particleFilter->getLastAverageWeight() : 0.0;
-        vm.pfRecoveryFraction = particleFilter ? particleFilter->getLastRecoveryFraction() : 0.0f;
-
-        vm.distanceSensors[0] = sampleDistanceSensor("LEFT", uiDistLeft);
-        vm.distanceSensors[1] = sampleDistanceSensor("RIGHT", uiDistRight);
-        vm.distanceSensors[2] = sampleDistanceSensor("FRONT", uiDistFront);
-        vm.distanceSensors[3] = sampleDistanceSensor("BACK", uiDistBack);
-
-        BrainScreen::renderRuntime(vm);
-        pros::delay(50);
+        pros::Task::notify_take(true, SCREEN_NOTIFY_FALLBACK_ms);
+        renderSimpleRuntimeScreen(captureRuntimeViewModel());
     }
 }
 
+static void renderReadyScreen() {
+    renderSimpleRuntimeScreen(captureRuntimeViewModel());
+}
+
 static void subsystemInit() {
-    drivetrain.registerThis();
-    intakes.registerThis();
+    if (drivetrain) drivetrain->registerThis();
+    if (intakes) intakes->registerThis();
+}
+
+static void createRobotObjects() {
+    startupLog("construct drivetrain");
+    drivetrain = new Drivetrain();
+    startupLog("constructed drivetrain");
+
+    startupLog("construct intakes");
+    intakes = new Intakes();
+    startupLog("constructed intakes");
+
+    startupLog("construct lift");
+    lift = new Lift();
+    startupLog("constructed lift");
+
+    startupLog("construct pneumatics");
+    selector = new pros::adi::DigitalOut(CONFIG::SELECT_PORT);
+    top = new pros::adi::DigitalOut(CONFIG::TOP_PORT);
+    tongue = new pros::adi::DigitalOut(CONFIG::TONGUE_PORT);
+    wing = new pros::adi::DigitalOut(CONFIG::WING_PORT);
+    startupLog("constructed pneumatics");
 }
 
 /**
@@ -314,6 +485,7 @@ static void subsystemInit() {
  * Falls back to config if it doesn't lock.
  */
 static Eigen::Vector3f acquireInitialPose() {
+    startupLog("acquireInitialPose begin");
     const float defaultImuHeadingRad = CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian);
     Eigen::Vector3f configPose(
         CONFIG::START_POSE_X.convert(meter),
@@ -322,11 +494,12 @@ static Eigen::Vector3f acquireInitialPose() {
 
     if (CONFIG::STARTUP_POSE_MODE ==
         CONFIG::StartupPoseMode::ConfiguredStartPoseOnly) {
+        startupLog("acquireInitialPose using configured pose only");
         return configPose;
     }
 
     if (CONFIG::STARTUP_POSE_MODE == CONFIG::StartupPoseMode::GPSXYPlusIMUHeading) {
-        drivetrain.resetHeading(defaultImuHeadingRad);
+        if (drivetrain) drivetrain->resetHeading(defaultImuHeadingRad);
         pros::delay(20);
     }
 
@@ -401,7 +574,7 @@ static Eigen::Vector3f acquireInitialPose() {
     if (!lastReading || !hasLast || stableCount < CONFIG::STARTUP_GPS_STABLE_SAMPLES) {
         renderInitStage(0.85f, "Init localization", "GPS timeout - config");
         pros::delay(200);
-        std::printf("[INIT] GPS timeout, using config pose\n");
+        startupLog("GPS timeout, using config pose");
         return configPose;
     }
 
@@ -409,73 +582,75 @@ static Eigen::Vector3f acquireInitialPose() {
         return GpsLocalization::robotCenterFromSensorPose(
             lastReading->sensorFieldPos,
             headingRad,
-            CONFIG::GPS_OFFSET);
+            CONFIG::gpsOffset());
     };
 
     auto safeReturn = [&configPose](const Eigen::Vector3f& pose) -> Eigen::Vector3f {
         if (LocMath::isFinitePose(pose)) {
-            std::printf("[INIT] startup pose: (%.3f, %.3f, %.1fdeg compass)\n",
-                        pose.x(), pose.y(), headingToCompassDeg(pose.z()));
+            startupLog("startup pose (%.3f, %.3f, %.1fdeg compass)",
+                       pose.x(), pose.y(), headingToCompassDeg(pose.z()));
             return pose;
         }
-        std::printf("[INIT] startup pose non-finite, using config\n");
+        startupLog("startup pose non-finite, using config");
         return configPose;
     };
 
     switch (CONFIG::STARTUP_POSE_MODE) {
         case CONFIG::StartupPoseMode::GPSXYPlusIMUHeading: {
-            const float imuHeadingRad = drivetrain.getHeading();
+            const float imuHeadingRad = drivetrain ? drivetrain->getHeading() : defaultImuHeadingRad;
             if (!LocMath::isFinite(imuHeadingRad)) {
-                std::printf("[INIT] IMU heading non-finite, using config\n");
+                startupLog("IMU heading non-finite, using config");
                 return configPose;
             }
             const std::optional<Eigen::Vector2f> c = centerFromGps(imuHeadingRad);
             if (!c) {
-                std::printf("[INIT] GPS centre solve failed (imu heading), using config\n");
+                startupLog("GPS centre solve failed (imu heading), using config");
                 return configPose;
             }
             return safeReturn(Eigen::Vector3f(c->x(), c->y(), imuHeadingRad));
         }
         case CONFIG::StartupPoseMode::FullGPSInit: {
             if (!lastReading->hasHeading || !LocMath::isFinite(lastReading->robotHeadingRad)) {
-                std::printf("[INIT] GPS heading non-finite, using config\n");
+                startupLog("GPS heading non-finite, using config");
                 return configPose;
             }
             const std::optional<Eigen::Vector2f> c = centerFromGps(lastReading->robotHeadingRad);
             if (!c) {
-                std::printf("[INIT] GPS centre solve failed (gps heading), using config\n");
+                startupLog("GPS centre solve failed (gps heading), using config");
                 return configPose;
             }
             return safeReturn(Eigen::Vector3f(c->x(), c->y(), lastReading->robotHeadingRad));
         }
         default:
+            startupLog("acquireInitialPose fell through to config pose");
             return configPose;
     }
 }
 
 static void localizationInit() {
+    startupLog("localizationInit begin");
     std::vector<SensorModel*> sensors;
     static GpsSensorModel gpsSensor(
         CONFIG::MCL_GPS_PORT,
         CONFIG::MCL_GPS_HEADING_OFFSET_deg,
-        CONFIG::GPS_OFFSET.x(),
-        CONFIG::GPS_OFFSET.y(),
+        CONFIG::gpsOffset().x(),
+        CONFIG::gpsOffset().y(),
         CONFIG::GPS_STDDEV_BASE.convert(meter));
 
     static DistanceSensorModel distLeft(
-        CONFIG::MCL_LEFT_DISTANCE_PORT,  CONFIG::DIST_LEFT_OFFSET,
+        CONFIG::MCL_LEFT_DISTANCE_PORT,  CONFIG::distLeftOffset(),
         static_cast<float>(CONFIG::MCL_LEFT_DISTANCE_WEIGHT),
         CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distLeft");
     static DistanceSensorModel distRight(
-        CONFIG::MCL_RIGHT_DISTANCE_PORT, CONFIG::DIST_RIGHT_OFFSET,
+        CONFIG::MCL_RIGHT_DISTANCE_PORT, CONFIG::distRightOffset(),
         static_cast<float>(CONFIG::MCL_RIGHT_DISTANCE_WEIGHT),
         CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distRight");
     static DistanceSensorModel distFront(
-        CONFIG::MCL_FRONT_DISTANCE_PORT, CONFIG::DIST_FRONT_OFFSET,
+        CONFIG::MCL_FRONT_DISTANCE_PORT, CONFIG::distFrontOffset(),
         static_cast<float>(CONFIG::MCL_FRONT_DISTANCE_WEIGHT),
         CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distFront");
     static DistanceSensorModel distBack(
-        CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::DIST_BACK_OFFSET,
+        CONFIG::MCL_BACK_DISTANCE_PORT,  CONFIG::distBackOffset(),
         static_cast<float>(CONFIG::MCL_BACK_DISTANCE_WEIGHT),
         CONFIG::MCL_DISTANCE_STDDEV.convert(meter), "distBack");
 
@@ -492,18 +667,20 @@ static void localizationInit() {
 
     // Lambdas reference only file-static objects → empty capture list is correct.
     auto predictionFn = []() -> Eigen::Vector2f {
-        Eigen::Vector2f proposal = drivetrain.consumePendingFwdOnlyDisplacement();
-        drivetrain.consumePendingDisplacement();
+        if (!drivetrain) return Eigen::Vector2f(0.0f, 0.0f);
+        Eigen::Vector2f proposal = drivetrain->consumePendingFwdOnlyDisplacement();
+        drivetrain->consumePendingDisplacement();
         return LocMath::isFiniteVec2(proposal) ? proposal : Eigen::Vector2f(0.0f, 0.0f);
     };
     auto angleFn = []() -> QAngle {
-        const float heading = drivetrain.getHeading();
+        const float heading = drivetrain ? drivetrain->getHeading() : 0.0f;
         return QAngle(LocMath::isFinite(heading) ? heading : 0.0f);
     };
 
     Eigen::Vector3f startPose = acquireInitialPose();
-    drivetrain.syncLocalizationReference(startPose);
-    combinedPose = startPose;
+    if (drivetrain) drivetrain->syncLocalizationReference(startPose);
+    storePose(&combinedPoseState, startPose);
+    storePose(&controllerPoseState, startPose);
 
     renderInitStage(0.90f, "Init localization", "Starting filter...");
 
@@ -537,6 +714,12 @@ static void localizationInit() {
     std::printf("[LOC_CONFIG] Distance Sensors Disabled: %s\n",
         CONFIG::MCL_DISABLE_DISTANCE_SENSORS_WHILE_DEBUGGING ? "YES" : "NO");
     std::printf("[LOC_CONFIG] Active MCL Sensors (gps+distance): %zu\n", sensors.size());
+    std::printf("[LOC_CONFIG] Controller Guard: max=%.3f in step=%.3f in jump=%.3f in reacquire=%.3f in/%d cycles\n",
+        CONFIG::LOC_CONTROLLER_CORRECTION_MAX_in,
+        CONFIG::LOC_CONTROLLER_CORRECTION_STEP_in,
+        CONFIG::LOC_CONTROLLER_CORRECTION_JUMP_REJECT_in,
+        CONFIG::LOC_CONTROLLER_REACQUIRE_DEADBAND_in,
+        CONFIG::LOC_CONTROLLER_REACQUIRE_STABLE_CYCLES);
     std::printf("[LOC_CONFIG] ═════════════════════════════════════════════════\n\n");
 
     particleFilter = new ParticleFilter(
@@ -544,46 +727,48 @@ static void localizationInit() {
         startPose,
         CONFIG::NUM_PARTICLES);
 
-    fusion = new LocalizationFusion(drivetrain, particleFilter, sampleGpsPose);
+    fusion = new LocalizationFusion(*drivetrain, particleFilter, sampleGpsPose);
     fusion->reset(startPose);
-
-    poseSource = []() -> Eigen::Vector3f {
-        MutexGuard guard(locMutex);
-        return LocMath::isFinitePose(combinedPose)
-            ? combinedPose
-            : drivetrain.getOdomPose();
-    };
+    controllerPoseGuard = new ControllerPoseGuard();
+    controllerPoseGuard->reset(startPose);
+    startupLog("localizationInit complete");
 }
 
-static void buildAutonCommand() {
-    if (autonCommand && autonCommand->isScheduled()) {
-        autonCommand->cancel();
+static bool runSelectedAutonNow() {
+    if (!subsystemsReady()) {
+        startupLog("runSelectedAutonNow aborted: subsystems not ready");
+        return false;
     }
 
-    AutonBuildContext context{
-        drivetrain,
-        intakes,
-        lift,
-        poseSource,
-    };
-
-    autonCommand = autonCommands::makeAutonCommand(
-        AutonSelector::getAuton(),
-        context);
-}
-
-static void scheduleSelectedAuton() {
-    buildAutonCommand();
-    if (autonCommand) {
-        CommandScheduler::schedule(autonCommand.get());
+    const AutonEntry* selectedEntry = AutonSelector::getAutonEntry();
+    if (selectedEntry == nullptr || selectedEntry->run == nullptr) {
+        startupLog("runSelectedAutonNow aborted: no runnable auton selected");
+        return false;
     }
-}
 
-static void launchSelectedAutonFromDriverControl() {
-    if (autonCommand && autonCommand->isScheduled()) {
-        return;
+    if (drivetrain) {
+        drivetrain->resetDriverAssistState();
+        drivetrain->stop();
     }
-    scheduleSelectedAuton();
+    if (intakes) {
+        intakes->stop();
+    }
+    if (lift) {
+        lift->stop();
+    }
+    CommandScheduler::reset();
+
+    bindAutonRuntime(
+        *drivetrain,
+        *intakes,
+        *lift,
+        currentControllerPose);
+
+    startupLog("run auton begin name=%s", selectedEntry->name);
+    const bool ok = runAuton(*selectedEntry);
+    startupLog("run auton end name=%s ok=%d", selectedEntry->name, ok ? 1 : 0);
+    resetAutonRuntime();
+    return ok;
 }
 
 /**
@@ -591,28 +776,38 @@ static void launchSelectedAutonFromDriverControl() {
  * Initialization renders inline, then starts background tasks once ready.
  */
 void initialize() {
+    openStartupLog();
+    startupLog("initialize entry");
     firstInitScreenMs = 0;
+    startupLog("create loc mutex");
+    ensureLocMutex();
+    startupLog("brain screen initialize");
     BrainScreen::initialize();
     renderInitStage(0.0f, "Boot", "Booting...");
+    startupLog("selector defaults");
     AutonSelector::selectAuton(DEFAULT_AUTON_SELECTION);
-    AutonSelector::selectAlliance(DEFAULT_ALLIANCE_SELECTION);
 
     renderInitStage(0.10f, "Init subsystems", "Creating subsystem objects");
+    createRobotObjects();
+    startupLog("register subsystems");
     subsystemInit();
     renderInitStage(0.18f, "Init subsystems", "Calibrating IMU");
-    drivetrain.calibrateImu();
-    drivetrain.resetHeading(CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian));
-    uiGps = std::make_unique<pros::Gps>(CONFIG::MCL_GPS_PORT);
-    uiDistLeft = std::make_unique<pros::Distance>(CONFIG::MCL_LEFT_DISTANCE_PORT);
-    uiDistRight = std::make_unique<pros::Distance>(CONFIG::MCL_RIGHT_DISTANCE_PORT);
-    uiDistFront = std::make_unique<pros::Distance>(CONFIG::MCL_FRONT_DISTANCE_PORT);
-    uiDistBack = std::make_unique<pros::Distance>(CONFIG::MCL_BACK_DISTANCE_PORT);
+    startupLog("calibrate imu begin");
+    drivetrain->calibrateImu();
+    startupLog("calibrate imu done");
+    drivetrain->resetHeading(CONFIG::DEFAULT_IMU_INIT_ANGLE.convert(radian));
+    startupLog("construct ui sensors");
+    uiGps = new pros::Gps(CONFIG::MCL_GPS_PORT);
+    uiDistLeft = new pros::Distance(CONFIG::MCL_LEFT_DISTANCE_PORT);
+    uiDistRight = new pros::Distance(CONFIG::MCL_RIGHT_DISTANCE_PORT);
+    uiDistFront = new pros::Distance(CONFIG::MCL_FRONT_DISTANCE_PORT);
+    uiDistBack = new pros::Distance(CONFIG::MCL_BACK_DISTANCE_PORT);
+    startupLog("constructed ui sensors");
 
     renderInitStage(0.25f, "Init localization", "Preparing sensor models");
+    startupLog("localization init begin");
     localizationInit();
-
-    renderInitStage(0.95f, "Init auton", "Building auton command graph");
-    buildAutonCommand();
+    startupLog("localization init done");
 
     renderInitStage(1.0f, "Ready", "Controller rumble + start tasks");
 
@@ -626,32 +821,55 @@ void initialize() {
     pros::delay(CONFIG::STARTUP_READY_HOLD_ms);
 
     AutonSelector::init();
-    ScreenManagerUI::init();
-    screenStatus = "Ready";
+    setScreenStatus("Ready");
+    renderReadyScreen();
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
+    startupLog("controller rumble");
     master.rumble(".");
 
-    pros::Task::create(screen_update_loop, "screen");
-    pros::Task::create(update_loop, "scheduler");
+    startupLog("create screen task");
+    screenTaskHandle = new pros::Task(
+        screen_update_loop,
+        TASK_PRIORITY_DEFAULT,
+        TASK_STACK_DEPTH_DEFAULT * 2,
+        "screen");
+    startupLog("create scheduler task");
+    schedulerTaskHandle = new pros::Task(
+        update_loop,
+        TASK_PRIORITY_DEFAULT,
+        TASK_STACK_DEPTH_DEFAULT * 2,
+        "scheduler");
+
+    const pros::task_t screenTask =
+        screenTaskHandle ? static_cast<pros::task_t>(*screenTaskHandle) : nullptr;
+    const pros::task_t schedulerTask =
+        schedulerTaskHandle ? static_cast<pros::task_t>(*schedulerTaskHandle) : nullptr;
+
+    if (screenTask == nullptr || schedulerTask == nullptr) {
+        setScreenStatus("Background task start failed");
+        startupLog("task create failure screen=%p scheduler=%p", screenTask, schedulerTask);
+        renderReadyScreen();
+        requestScreenRefresh();
+        return;
+    }
+
+    startupLog("initialize complete");
+    requestScreenRefresh();
 }
 
 void disabled() {}
 
-void competition_initialize() {
-    buildAutonCommand();
-}
+void competition_initialize() {}
 
 void autonomous() {
-    scheduleSelectedAuton();
+    startupLog("autonomous entry");
+    runSelectedAutonNow();
+    startupLog("autonomous exit");
 }
 
 void opcontrol() {
     CommandScheduler::reset();
-
-    if (autonCommand && autonCommand->isScheduled()) {
-        autonCommand->cancel();
-    }
 
     pros::Controller master(pros::E_CONTROLLER_MASTER);
     bool downBAutonLatch = false;
@@ -663,16 +881,21 @@ void opcontrol() {
         ScoreLow,
     };
     IntakeMode intakeMode = IntakeMode::Off;
+    IntakeMode previousIntakeMode = IntakeMode::Off;
     bool wingState = false;
     bool tongueState = false;
     int intakeSpeed = 0;
     bool selectMode = false;
     bool upMode = false;
+    uint32_t scoreMidEnteredMs = 0;
+    constexpr uint32_t SCORE_MID_INTAKE_DELAY_ms = 500;
 
     while (true) {
         const bool downHeld = master.get_digital(DIGITAL_DOWN);
         const bool bHeld = master.get_digital(DIGITAL_B);
         const bool downBHeld = downHeld && bHeld;
+        const float forward = static_cast<float>(master.get_analog(ANALOG_LEFT_Y));
+        const float turn = static_cast<float>(master.get_analog(ANALOG_RIGHT_X));
 
         if (master.get_digital_new_press(DIGITAL_R2)) {
             intakeMode = (intakeMode == IntakeMode::Loading)
@@ -695,6 +918,13 @@ void opcontrol() {
                 : IntakeMode::ScoreLow;
         }
 
+        if (intakeMode != previousIntakeMode) {
+            if (intakeMode == IntakeMode::ScoreMid) {
+                scoreMidEnteredMs = pros::millis();
+            }
+            previousIntakeMode = intakeMode;
+        }
+
         switch (intakeMode) {
             case IntakeMode::Loading:
                 intakeSpeed = 127;
@@ -707,9 +937,11 @@ void opcontrol() {
                 upMode = true;
                 break;
             case IntakeMode::ScoreMid:
-                intakeSpeed = 127;
+                intakeSpeed =
+                    (pros::millis() - scoreMidEnteredMs >= SCORE_MID_INTAKE_DELAY_ms)
+                    ? 127
+                    : 0;
                 selectMode = false;
-                upMode = true;
                 break;
             case IntakeMode::ScoreLow:
                 intakeSpeed = -80;
@@ -721,28 +953,36 @@ void opcontrol() {
         }
 
         if (intakeSpeed == 0) {
-            intakes.stop();
+            intakes->stop();
         } else {
-            intakes.spin(intakeSpeed);
+            intakes->spin(intakeSpeed);
         }
-        selector.set_value(selectMode);
-        top.set_value(upMode);
+        selector->set_value(selectMode);
+        top->set_value(upMode);
 
-        if (downBHeld && !downBAutonLatch &&
-            !pros::competition::is_connected()) {
-            launchSelectedAutonFromDriverControl();
+        if (downBHeld && !downBAutonLatch) {
+            autonomous();
+            if (AutonSelector::getAuton() != Auton::NONE) {
+                master.rumble(".");
+            }
+            intakeMode = IntakeMode::Off;
+            previousIntakeMode = IntakeMode::Off;
+            intakeSpeed = 0;
+            selectMode = false;
+            upMode = false;
+            if (intakes) {
+                intakes->stop();
+            }
+            if (drivetrain) {
+                drivetrain->resetDriverAssistState();
+            }
         }
         downBAutonLatch = downBHeld;
 
-        float forward = static_cast<float>(
-            master.get_analog(ANALOG_LEFT_Y));
-        float turn = static_cast<float>(
-            master.get_analog(ANALOG_RIGHT_X));
-
-        if (drivetrain.getCurrentCommand() == nullptr) {
-            drivetrain.driverArcade(forward, turn);
+        if (drivetrain->getCurrentCommand() == nullptr) {
+            drivetrain->driverArcade(forward, turn);
         } else {
-            drivetrain.resetDriverAssistState();
+            drivetrain->resetDriverAssistState();
         }
         // Only toggle wing/tongue when NOT in the DOWN+B auton-launch combo
         if (!downHeld && master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
@@ -752,8 +992,8 @@ void opcontrol() {
             tongueState = !tongueState;
         }
         
-        wing.set_value(wingState);
-        tongue.set_value(tongueState);
+        wing->set_value(wingState);
+        tongue->set_value(tongueState);
 
         pros::delay(20);
     }

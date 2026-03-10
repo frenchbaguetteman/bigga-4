@@ -36,6 +36,7 @@ Most autonomous issues are not autonomous issues. They are startup or localizati
 - `Example Move`
 - `Example Turn`
 - `Example Path`
+- `Example LTV`
 
 These are intentionally included in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp) so you can test one motion style at a time.
 
@@ -44,6 +45,7 @@ These are intentionally included in [`src/autonomous/autons.cpp`](../src/autonom
 1. Run `Example Move` to validate point driving.
 2. Run `Example Turn` to validate heading control.
 3. Run `Example Path` to validate profile following and intake parallelism.
+4. Run `Example LTV` to compare LTV tracking on the same path shape.
 
 ### Why this is better than tuning on a scoring auton
 
@@ -118,6 +120,8 @@ The core control law reads the current pose from `poseSource`, samples the desir
 3. Increase `RAMSETE_BETA` carefully if tracking is too loose.
 4. Increase `RAMSETE_ZETA` if it needs more damping.
 5. If the path still looks wrong, validate pose quality before doing more controller tuning.
+
+If you want a same-path controller comparison, run `Example LTV` after each Ramsete change so you can separate profile geometry issues from controller-specific issues.
 
 ## Tutorial 6: Create Your First Custom Auton
 
@@ -197,4 +201,4 @@ Batch upload path:
 python3 uploadAllAutons.py
 ```
 
-That script rewrites the default selections repeatedly so you can push multiple slot variants.
+That script rewrites the default selections repeatedly so you can push the three competition variants without hand-editing `include/auton.h`.

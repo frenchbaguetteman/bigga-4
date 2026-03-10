@@ -61,7 +61,7 @@
 | Symbol | Page |
 |---|---|
 | `Command`, `Subsystem`, `CommandScheduler` | [Command Framework](API_COMMANDS.md) |
-| `DriveMoveCommand`, `RotateCommand`, `RamseteCommand` | [Autonomous and Motion](API_AUTONOMOUS_AND_MOTION.md) |
+| `DriveMoveCommand`, `RotateCommand`, `RamseteCommand`, `LtvUnicycleCommand` | [Autonomous and Motion](API_AUTONOMOUS_AND_MOTION.md) |
 | `Drivetrain`, `AutonSelector`, `BrainScreen` | [Subsystems and UI](API_SUBSYSTEMS_AND_UI.md) |
 | `DISTANCE_PID`, `TURN_PID`, `RAMSETE_*` | [Configuration Surface](API_CONFIGURATION.md) |
 

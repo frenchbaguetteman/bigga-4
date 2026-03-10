@@ -4,15 +4,29 @@
  */
 #include "ui/autonSelector.h"
 #include "ui/brainScreen.h"
+
 #include <cstdio>
-#include <cmath>
 
 // ── Static methods ──────────────────────────────────────────────────────────
 
 namespace {
 
-const std::vector<Auton>& autonList() {
+const AutonList& autonList() {
     return availableAutons();
+}
+
+int indexOfAuton(const AutonEntry* auton) {
+    const auto& list = autonList();
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (&list[i] == auton) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void logSelection(const AutonEntry* entry) {
+    std::printf("[AUTON_UI] selected=%s\n", entry ? entry->name : "None");
 }
 
 } // namespace
@@ -20,66 +34,66 @@ const std::vector<Auton>& autonList() {
 void AutonSelector::init() {
     const auto& list = autonList();
     if (list.empty()) {
-        s_index = 0;
+        s_auton = nullptr;
         return;
     }
-    if (s_index < 0 || s_index >= static_cast<int>(list.size())) {
-        s_index = 0;
+
+    if (indexOfAuton(s_auton) < 0 || s_auton == nullptr) {
+        s_auton = &list.front();
     }
 }
 
 void AutonSelector::nextAuton() {
+    init();
     const auto& list = autonList();
     if (list.empty()) return;
-    s_index = (s_index + 1) % static_cast<int>(list.size());
+
+    const int current = indexOfAuton(s_auton);
+    if (current < 0 || current >= static_cast<int>(list.size()) - 1) {
+        s_auton = &list.front();
+        logSelection(s_auton);
+        return;
+    }
+
+    s_auton = &list[static_cast<size_t>(current + 1)];
+    logSelection(s_auton);
 }
 
 void AutonSelector::prevAuton() {
+    init();
     const auto& list = autonList();
     if (list.empty()) return;
-    s_index = (s_index - 1 + static_cast<int>(list.size()))
-              % static_cast<int>(list.size());
-}
 
-void AutonSelector::toggleAlliance() {
-    s_alliance = (s_alliance == Alliance::RED) ? Alliance::BLUE : Alliance::RED;
-}
+    const int current = indexOfAuton(s_auton);
+    if (current <= 0) {
+        s_auton = &list.back();
+        logSelection(s_auton);
+        return;
+    }
 
-void AutonSelector::selectAlliance(Alliance alliance) {
-    s_alliance = alliance;
+    s_auton = &list[static_cast<size_t>(current - 1)];
+    logSelection(s_auton);
 }
 
 void AutonSelector::selectAuton(Auton auton) {
-    const auto& list = autonList();
-    for (size_t i = 0; i < list.size(); ++i) {
-        if (list[i] == auton) {
-            s_index = static_cast<int>(i);
-            return;
-        }
-    }
-
-    s_index = 0;
+    s_auton = findAuton(auton);
+    init();
+    logSelection(s_auton);
 }
 
 Auton AutonSelector::getAuton() {
-    const auto& list = autonList();
-    if (list.empty()) return Auton::NONE;
-    if (s_index < 0 || s_index >= static_cast<int>(list.size())) {
-        s_index = 0;
-    }
-    return list[static_cast<size_t>(s_index)];
+    init();
+    return s_auton ? s_auton->id : Auton::NONE;
 }
 
-Alliance AutonSelector::getAlliance() {
-    return s_alliance;
+const AutonEntry* AutonSelector::getAutonEntry() {
+    init();
+    return s_auton;
 }
 
 std::string AutonSelector::getAutonStr() {
-    return std::string(autonName(getAuton()));
-}
-
-std::string AutonSelector::getAllianceStr() {
-    return std::string(allianceName(getAlliance()));
+    init();
+    return std::string(s_auton ? s_auton->name : "None");
 }
 
 void AutonSelector::render(const Eigen::Vector3f& pose,
@@ -87,9 +101,7 @@ void AutonSelector::render(const Eigen::Vector3f& pose,
     BrainScreen::RuntimeViewModel vm;
     vm.pose = pose;
     vm.selectedAuton = getAuton();
-    vm.selectedAlliance = getAlliance();
-    vm.auton = std::string(autonName(vm.selectedAuton));
-    vm.alliance = std::string(allianceName(vm.selectedAlliance));
+    vm.auton = getAutonStr();
     vm.status = status;
     BrainScreen::renderRuntime(vm);
 }

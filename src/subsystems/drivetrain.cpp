@@ -33,6 +33,11 @@ Drivetrain::Drivetrain()
         .withOdometry()
         .buildOdometry();
 
+    if (auto model = getModel()) {
+        model->setBrakeMode(okapi::AbstractMotor::brakeMode::brake);
+    }
+    resetDriverAssistState();
+
     std::printf("[DRIVE] OkapiLib chassis built: blue 600RPM, wheel=%.3f\" track=%.3f\"\n",
         wheelDiameterIn, trackWidthIn);
 }
@@ -88,56 +93,85 @@ void Drivetrain::setDriveSpeeds(DriveSpeeds speeds) {
         std::clamp(rightMV / kMaxMV, -1.0f, 1.0f));
 }
 
-float Drivetrain::joystickCurve(float input, float t) {
-    if (std::fabs(input) < CONFIG::DRIVER_JOYSTICK_DEADBAND) return 0.0f;
-    float sign = (input > 0.0f) ? 1.0f : -1.0f;
-    float norm = std::fabs(input) / 127.0f;
-    float curved = std::pow(norm, t);
-    return sign * curved * 127.0f;
+float Drivetrain::joystickCurve(float input, float t, float deadzone) {
+    if (std::fabs(input) < deadzone) return 0.0f;
+    if (t == 0.0f) return input;
+    const float expNeg = std::exp(-t / 10.0f);
+    const float expTerm = std::exp((std::fabs(input) - 127.0f) / 10.0f);
+    return (expNeg + expTerm * (1.0f - expNeg)) * input;
 }
 
 void Drivetrain::driverArcade(float forwardStick, float turnStick) {
-    float fwd  = joystickCurve(forwardStick, CONFIG::DRIVER_FORWARD_CURVE_T);
-    float turn = joystickCurve(turnStick, CONFIG::DRIVER_TURN_CURVE_T);
+    const bool sticksActive = std::fabs(forwardStick) >= m_activeBrakeStickDeadband ||
+                              std::fabs(turnStick) >= m_activeBrakeStickDeadband;
 
-    bool stickIdle = (std::fabs(fwd) < CONFIG::DRIVER_ACTIVE_BRAKE_STICK_DEADBAND &&
-                      std::fabs(turn) < CONFIG::DRIVER_ACTIVE_BRAKE_STICK_DEADBAND);
+    if (sticksActive) {
+        m_activeBrakeWasDriving = true;
+        m_activeBrakeLeftTargetDeg = leftMotorPositionDeg();
+        m_activeBrakeRightTargetDeg = rightMotorPositionDeg();
 
-    if (CONFIG::DRIVER_ACTIVE_BRAKE_ENABLED && stickIdle) {
-        if (m_wasStopped) {
-            // Active brake: hold current heading
-            float heading = getHeading();
-            float headingDeg = heading * 180.0f / static_cast<float>(M_PI);
-            float err = m_activeBrakeTargetDeg - headingDeg;
-            while (err >  180.0f) err -= 360.0f;
-            while (err < -180.0f) err += 360.0f;
+        const float curvedForward =
+            joystickCurve(forwardStick, m_driverForwardCurve, m_driverDeadband);
+        const float curvedTurn =
+            joystickCurve(turnStick, m_driverTurnCurve, m_driverDeadband);
+        arcade(curvedForward, curvedTurn);
+        return;
+    }
 
-            float brakePower = CONFIG::DRIVER_ACTIVE_BRAKE_KP * err;
-            if (std::fabs(err) < CONFIG::DRIVER_ACTIVE_BRAKE_POS_DEADBAND_deg) {
-                brakePower = 0.0f;
-            }
-            if (std::fabs(brakePower) > CONFIG::DRIVER_ACTIVE_BRAKE_POWER) {
-                brakePower = (brakePower > 0.0f) ? CONFIG::DRIVER_ACTIVE_BRAKE_POWER
-                                                  : -CONFIG::DRIVER_ACTIVE_BRAKE_POWER;
-            }
-            if (std::fabs(brakePower) < CONFIG::DRIVER_ACTIVE_BRAKE_OUTPUT_DEADBAND) {
-                brakePower = 0.0f;
-            }
-            arcade(0.0f, brakePower);
-        } else {
-            m_activeBrakeTargetDeg = getHeading() * 180.0f / static_cast<float>(M_PI);
-            m_wasStopped = true;
-            arcade(0.0f, 0.0f);
-        }
-    } else {
-        m_wasStopped = false;
-        arcade(fwd, turn);
+    if (m_activeBrakeEnabled && m_activeBrakeWasDriving) {
+        applyActiveBrake();
+        return;
+    }
+
+    if (auto model = getModel()) {
+        model->tank(0.0, 0.0);
     }
 }
 
 void Drivetrain::resetDriverAssistState() {
-    m_wasStopped = true;
-    m_activeBrakeTargetDeg = getHeading() * 180.0f / static_cast<float>(M_PI);
+    m_activeBrakeWasDriving = false;
+    m_activeBrakeLeftTargetDeg = leftMotorPositionDeg();
+    m_activeBrakeRightTargetDeg = rightMotorPositionDeg();
+}
+
+void Drivetrain::applyActiveBrake() {
+    auto model = getModel();
+    if (!model) return;
+
+    const float leftError = m_activeBrakeLeftTargetDeg - leftMotorPositionDeg();
+    const float rightError = m_activeBrakeRightTargetDeg - rightMotorPositionDeg();
+
+    if (std::fabs(leftError) <= m_activeBrakePosDeadbandDeg &&
+        std::fabs(rightError) <= m_activeBrakePosDeadbandDeg) {
+        model->tank(0.0, 0.0);
+        return;
+    }
+
+    float leftOut = std::clamp(leftError * m_activeBrakeKp,
+                               -m_activeBrakePower, m_activeBrakePower);
+    float rightOut = std::clamp(rightError * m_activeBrakeKp,
+                                -m_activeBrakePower, m_activeBrakePower);
+
+    if (std::fabs(leftOut) < m_activeBrakeOutputDeadband) leftOut = 0.0f;
+    if (std::fabs(rightOut) < m_activeBrakeOutputDeadband) rightOut = 0.0f;
+
+    model->tank(leftOut / 127.0f, rightOut / 127.0f);
+}
+
+float Drivetrain::leftMotorPositionDeg() const {
+    auto model = getModel();
+    if (!model) return 0.0f;
+    const auto sensors = model->getSensorVals();
+    if (sensors.size() < 2) return 0.0f;
+    return static_cast<float>(sensors[0]) * 360.0f / static_cast<float>(okapi::imev5BlueTPR);
+}
+
+float Drivetrain::rightMotorPositionDeg() const {
+    auto model = getModel();
+    if (!model) return 0.0f;
+    const auto sensors = model->getSensorVals();
+    if (sensors.size() < 2) return 0.0f;
+    return static_cast<float>(sensors[1]) * 360.0f / static_cast<float>(okapi::imev5BlueTPR);
 }
 
 // ── Heading / IMU ───────────────────────────────────────────────────────────

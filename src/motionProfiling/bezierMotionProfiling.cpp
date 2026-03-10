@@ -5,12 +5,10 @@
  * Builds a MotionProfile from a set of Bézier control points and
  * velocity constraints.
  */
-#include "motionProfiling/bezier.h"
-#include "motionProfiling/motionProfile.h"
-#include "motionProfiling/path.h"
-#include "velocityProfile/trapezoidalVelocityProfile.hpp"
-#include "utils/utils.h"
 #include "json/json.h"
+#include "motionProfiling/profileBuilder.h"
+#include "utils/utils.h"
+
 #include <cmath>
 #include <vector>
 
@@ -26,9 +24,9 @@
 MotionProfile buildBezierProfile(
         const std::vector<bezier::BezierSegment>& segments,
         ProfileConstraints constraints,
-        int sampleCount = 200,
-        float initialSpeed = 0.0f,
-        float endSpeed     = 0.0f) {
+        int sampleCount,
+        float initialSpeed,
+        float endSpeed) {
 
     // 1. Sample the spline into a Path
     Path path;

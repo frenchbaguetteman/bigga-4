@@ -1,7 +1,6 @@
 #include "autonomous/chassis.h"
 
 #include "command/commandGroup.h"
-#include "command/commandScheduler.h"
 #include "commands/driveMove.h"
 #include "commands/rotate.h"
 #include "pros/rtos.hpp"
@@ -10,6 +9,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <limits>
+#include <mutex>
 
 namespace {
 
@@ -23,10 +23,12 @@ Chassis::Chassis(Drivetrain* drivetrain,
                  std::function<bool()> cancelRequested)
     : m_drivetrain(drivetrain)
     , m_poseSource(std::move(poseSource))
-    , m_cancelRequested(std::move(cancelRequested)) {
+    , m_cancelRequested(std::move(cancelRequested))
+    , m_motionMutex(std::make_unique<pros::RecursiveMutex>()) {
     const Eigen::Vector3f pose = currentPose();
     m_headingZeroRad = pose.z();
     m_headingHoldRad = pose.z();
+    m_localOriginPose = pose;
 }
 
 void Chassis::pid_targets_reset() {
@@ -35,11 +37,61 @@ void Chassis::pid_targets_reset() {
     m_headingHoldRad = pose.z();
 }
 
+void Chassis::set_global_frame() {
+    m_coordinateFrame = CoordinateFrame::Global;
+}
+
+void Chassis::set_local_frame() {
+    m_coordinateFrame = CoordinateFrame::Local;
+}
+
+Chassis::CoordinateFrame Chassis::current_frame() const {
+    return m_coordinateFrame;
+}
+
+void Chassis::set_local_origin_here() {
+    m_localOriginPose = currentPose();
+}
+
+void Chassis::set_local_origin(double xInches, double yInches, double headingDeg) {
+    m_localOriginPose = Eigen::Vector3f(
+        inchesToMeters(xInches),
+        inchesToMeters(yInches),
+        ezDegreesToInternalRadians(headingDeg));
+}
+
+Eigen::Vector3f Chassis::local_origin() const {
+    return m_localOriginPose;
+}
+
+Eigen::Vector3f Chassis::pose_to_global(const Eigen::Vector3f& pose,
+                                        CoordinateFrame frame) const {
+    if (frame == CoordinateFrame::Global) {
+        return pose;
+    }
+
+    const float cosT = std::cos(m_localOriginPose.z());
+    const float sinT = std::sin(m_localOriginPose.z());
+    return Eigen::Vector3f(
+        m_localOriginPose.x() + pose.x() * cosT - pose.y() * sinT,
+        m_localOriginPose.y() + pose.x() * sinT + pose.y() * cosT,
+        wrapRadians(m_localOriginPose.z() + pose.z()));
+}
+
+Eigen::Vector2f Chassis::point_to_global(const ez::pose& point,
+                                         CoordinateFrame frame) const {
+    return pose_to_global(
+               Eigen::Vector3f(inchesToMeters(point.x), inchesToMeters(point.y), 0.0f),
+               frame)
+        .head<2>();
+}
+
 void Chassis::drive_imu_reset() {
     if (!m_drivetrain) return;
     m_drivetrain->resetHeading(0.0f);
     m_headingZeroRad = 0.0f;
     m_headingHoldRad = 0.0f;
+    m_localOriginPose = currentPose();
 }
 
 void Chassis::drive_sensor_reset() {
@@ -57,6 +109,7 @@ void Chassis::odom_xyt_set(double xInches, double yInches, double headingDeg) {
     m_drivetrain->syncLocalizationReference(pose);
     m_headingZeroRad = pose.z();
     m_headingHoldRad = pose.z();
+    m_localOriginPose = pose;
 }
 
 void Chassis::pid_drive_set(double targetInches, int speed, bool /*slewOn*/) {
@@ -96,7 +149,7 @@ void Chassis::pid_odom_set(ez::pose target,
     if (!m_drivetrain || cancelled()) return;
 
     const Eigen::Vector3f start = currentPose();
-    const Eigen::Vector2f targetM(inchesToMeters(target.x), inchesToMeters(target.y));
+    const Eigen::Vector2f targetM = resolvePoint(target);
     const float targetHeading = headingFromPoint(start.head<2>(), targetM, dir, m_headingHoldRad);
     const Eigen::Vector3f targetPose(targetM.x(), targetM.y(), targetHeading);
 
@@ -131,9 +184,7 @@ void Chassis::pid_odom_set(std::initializer_list<ez::movement> path, bool /*slew
     float finalHeading = m_headingHoldRad;
 
     for (const auto& movement : movements) {
-        const Eigen::Vector2f targetM(
-            inchesToMeters(movement.target.x),
-            inchesToMeters(movement.target.y));
+        const Eigen::Vector2f targetM = resolvePoint(movement.target);
         pointsM.push_back(targetM);
         finalHeading = headingFromPoint(prev, targetM, movement.dir, finalHeading);
         segments.push_back(new DriveMoveCommand(
@@ -202,16 +253,20 @@ void Chassis::pid_turn_set(ez::pose target,
                            ez::e_angle_behavior behavior,
                            bool slewOn) {
     const Eigen::Vector3f pose = currentPose();
-    const Eigen::Vector2f targetM(inchesToMeters(target.x), inchesToMeters(target.y));
+    const Eigen::Vector2f targetM = resolvePoint(target);
     const float targetRad = headingFromPoint(pose.head<2>(), targetM, dir, pose.z());
 
     const double ezDegrees =
-        -static_cast<double>(wrapRadians(targetRad - m_headingZeroRad)) * 180.0 / kAutonPi;
+        static_cast<double>(wrapRadians(targetRad - m_headingZeroRad)) * 180.0 / kAutonPi;
     pid_turn_set(ezDegrees, speed, behavior, slewOn);
 }
 
 void Chassis::pid_wait() {
-    while (motion_active() && !cancelled()) {
+    while (!cancelled()) {
+        if (!motion_active()) {
+            break;
+        }
+        stepMotion();
         pros::delay(10);
     }
 
@@ -221,20 +276,25 @@ void Chassis::pid_wait() {
 }
 
 void Chassis::pid_wait_until(double target) {
-    if (!motion_active()) return;
-
     const float targetMeters = inchesToMeters(std::fabs(target));
     const float targetRadians = std::fabs(ezDegreesToInternalRadians(target));
 
-    while (motion_active() && !cancelled()) {
+    while (!cancelled()) {
+        const MotionSnapshot motion = snapshotMotion();
+        if (!motion.active) {
+            break;
+        }
+
+        stepMotion();
+
         const Eigen::Vector3f pose = currentPose();
-        if (m_motionKind == MotionKind::Turn) {
-            const float traveled = std::fabs(wrapRadians(pose.z() - m_motionStartPose.z()));
+        if (motion.kind == MotionKind::Turn) {
+            const float traveled = std::fabs(wrapRadians(pose.z() - motion.startPose.z()));
             if (traveled >= targetRadians) {
                 break;
             }
         } else {
-            const float traveled = motionProgressMeters(pose.head<2>());
+            const float traveled = motionProgressMeters(motion, pose.head<2>());
             if (traveled >= targetMeters) {
                 break;
             }
@@ -248,12 +308,15 @@ void Chassis::pid_wait_until(double target) {
 }
 
 void Chassis::pid_wait_until(ez::pose target) {
-    if (!motion_active()) return;
-
-    const Eigen::Vector2f targetM(inchesToMeters(target.x), inchesToMeters(target.y));
+    const Eigen::Vector2f targetM = resolvePoint(target);
     const float tolerance = inchesToMeters(2.0);
 
-    while (motion_active() && !cancelled()) {
+    while (!cancelled()) {
+        const MotionSnapshot motion = snapshotMotion();
+        if (!motion.active) {
+            break;
+        }
+        stepMotion();
         const Eigen::Vector2f current = currentPose().head<2>();
         if ((current - targetM).norm() <= tolerance) {
             break;
@@ -271,19 +334,22 @@ void Chassis::pid_wait_until_point(ez::pose target) {
 }
 
 void Chassis::cancel_motion() {
-    if (m_motion && m_motion->isScheduled()) {
-        m_motion->cancel();
+    std::unique_ptr<Command> motionToCancel;
+    std::scoped_lock guard(*m_motionMutex);
+    motionToCancel = std::move(m_motion);
+    m_motionKind = MotionKind::None;
+    m_pathPointsM.clear();
+    if (motionToCancel) {
+        motionToCancel->end(true);
     }
     if (m_drivetrain) {
         m_drivetrain->stop();
     }
-    m_motion.reset();
-    m_motionKind = MotionKind::None;
-    m_pathPointsM.clear();
 }
 
 bool Chassis::motion_active() const {
-    return m_motion && m_motion->isScheduled();
+    std::scoped_lock guard(*m_motionMutex);
+    return static_cast<bool>(m_motion);
 }
 
 bool Chassis::cancelled() const {
@@ -303,17 +369,32 @@ Eigen::Vector3f Chassis::currentPose() const {
     return Eigen::Vector3f(0.0f, 0.0f, 0.0f);
 }
 
-float Chassis::motionProgressMeters(const Eigen::Vector2f& current) const {
-    if (m_pathPointsM.empty()) {
-        return (current - m_motionStartPose.head<2>()).norm();
+Eigen::Vector2f Chassis::resolvePoint(const ez::pose& point) const {
+    return point_to_global(point, m_coordinateFrame);
+}
+
+Chassis::MotionSnapshot Chassis::snapshotMotion() const {
+    std::scoped_lock guard(*m_motionMutex);
+
+    MotionSnapshot snapshot;
+    snapshot.active = static_cast<bool>(m_motion);
+    snapshot.kind = m_motionKind;
+    snapshot.startPose = m_motionStartPose;
+    snapshot.pathPointsM = m_pathPointsM;
+    return snapshot;
+}
+
+float Chassis::motionProgressMeters(const MotionSnapshot& motion, const Eigen::Vector2f& current) {
+    if (motion.pathPointsM.empty()) {
+        return (current - motion.startPose.head<2>()).norm();
     }
 
-    Eigen::Vector2f segmentStart = m_motionStartPose.head<2>();
+    Eigen::Vector2f segmentStart = motion.startPose.head<2>();
     float cumulative = 0.0f;
     float bestProgress = 0.0f;
     float bestDistance = std::numeric_limits<float>::infinity();
 
-    for (const Eigen::Vector2f& segmentEnd : m_pathPointsM) {
+    for (const Eigen::Vector2f& segmentEnd : motion.pathPointsM) {
         const Eigen::Vector2f segment = segmentEnd - segmentStart;
         const float segmentLength = segment.norm();
 
@@ -358,12 +439,35 @@ void Chassis::startMotion(std::unique_ptr<Command> motion,
     cancel_motion();
     if (!motion) return;
 
+    std::scoped_lock guard(*m_motionMutex);
     m_motion = std::move(motion);
     m_motionKind = kind;
     m_motionStartPose = startPose;
     m_motionTargetPose = targetPose;
     m_pathPointsM = std::move(pathPoints);
-    CommandScheduler::schedule(m_motion.get());
+    m_motion->initialize();
+}
+
+void Chassis::stepMotion() {
+    std::unique_ptr<Command> finishedMotion;
+
+    {
+        std::scoped_lock guard(*m_motionMutex);
+        if (!m_motion) {
+            return;
+        }
+
+        m_motion->execute();
+        if (m_motion->isFinished()) {
+            finishedMotion = std::move(m_motion);
+            m_motionKind = MotionKind::None;
+            m_pathPointsM.clear();
+        }
+    }
+
+    if (finishedMotion) {
+        finishedMotion->end(false);
+    }
 }
 
 float Chassis::inchesToMeters(double inches) {
@@ -371,7 +475,7 @@ float Chassis::inchesToMeters(double inches) {
 }
 
 float Chassis::ezDegreesToInternalRadians(double degrees) {
-    return static_cast<float>(-degrees * kAutonPi / 180.0);
+    return static_cast<float>(degrees * kAutonPi / 180.0);
 }
 
 float Chassis::wrapRadians(float radians) {
