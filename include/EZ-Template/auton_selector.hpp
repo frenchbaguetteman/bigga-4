@@ -6,10 +6,9 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #pragma once
 #include <tuple>
+#include <vector>
 
 #include "EZ-Template/auton.hpp"
-
-using namespace std;
 
 namespace ez {
 class AutonSelector {

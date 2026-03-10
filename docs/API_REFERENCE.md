@@ -19,7 +19,7 @@
 <div class="api-card">
   <span class="api-label">Motion</span>
   <h3><a href="API_AUTONOMOUS_AND_MOTION/">Autonomous and Motion</a></h3>
-  <p>Auton selection enums, build context, point moves, turns, RAMSETE, and profiles.</p>
+  <p>Auton selector entries, direct auton execution, EZ motion primitives, and tracked EZ RAMSETE/LTV modes.</p>
 </div>
 
 <div class="api-card">
@@ -43,8 +43,8 @@
 | Pose units | meters for position, radians for heading |
 | Internal frame | `+X` forward/east, `+Y` left/north, positive heading is CCW |
 | Teleop driving | handled in `opcontrol()` in [`src/main.cpp`](../src/main.cpp) |
-| Autonomous entrypoint | `autonCommands::makeAutonCommand(...)` |
-| Shared mechanism bundles | `include/autonomous/sharedCommands.h` |
+| Autonomous entrypoint | `runAuton(...)` |
+| Shared mechanism bundles | direct-function routines in `src/autonomous/autons.cpp` |
 | Main tuning surface | [`include/config.h`](../include/config.h) |
 
 ## Runtime Entry Points
@@ -52,16 +52,16 @@
 | Symbol | File | Purpose |
 |---|---|---|
 | `initialize()` | [`src/main.cpp`](../src/main.cpp) | startup, subsystem construction, localization init, first auton build |
-| `autonomous()` | [`src/main.cpp`](../src/main.cpp) | rebuild and schedule the selected auton |
+| `autonomous()` | [`src/main.cpp`](../src/main.cpp) | bind runtime and run the selected auton directly |
 | `opcontrol()` | [`src/main.cpp`](../src/main.cpp) | controller polling, manual drive, skills special-case handling |
-| `makeAutonCommand(...)` | [`include/autonomous/autonCommands.h`](../include/autonomous/autonCommands.h) | convert selector state into a runnable top-level command graph |
+| `runAuton(...)` | [`include/autonomous/autons.h`](../include/autonomous/autons.h) | run a selected auton entry in the current task |
 
 ## Most Used Symbols
 
 | Symbol | Page |
 |---|---|
 | `Command`, `Subsystem`, `CommandScheduler` | [Command Framework](API_COMMANDS.md) |
-| `DriveMoveCommand`, `RotateCommand`, `RamseteCommand`, `LtvUnicycleCommand` | [Autonomous and Motion](API_AUTONOMOUS_AND_MOTION.md) |
+| `AutonEntry`, `runAuton(...)`, `pid_odom_ramsete_set(...)`, `pid_odom_ltv_set(...)` | [Autonomous and Motion](API_AUTONOMOUS_AND_MOTION.md) |
 | `Drivetrain`, `AutonSelector`, `BrainScreen` | [Subsystems and UI](API_SUBSYSTEMS_AND_UI.md) |
 | `DISTANCE_PID`, `TURN_PID`, `RAMSETE_*` | [Configuration Surface](API_CONFIGURATION.md) |
 
@@ -71,7 +71,7 @@
 |---|---|
 | Command framework | `include/command/*.h` |
 | Autonomous selection/building | `include/autonomous/*.h` |
-| Motion commands | `include/commands/*.h`, `include/motionProfiling/*.h` |
+| Motion backends | `include/EZ-Template/*.hpp`, `include/motionProfiling/*.h` |
 | Subsystems | `include/subsystems/*.h` |
 | UI | `include/ui/*.h` |
 | Tunables | `include/config.h` |

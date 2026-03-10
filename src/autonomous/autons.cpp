@@ -1,10 +1,10 @@
 #include "autonomous/autons.h"
 
+#include "config.h"
 #include "tuning/relayPidAutotuner.h"
 #include "EZ-Template/drive/drive.hpp"
 #include "EZ-Template/tracking_wheel.hpp"
 #include "Eigen/Core"
-#include "config.h"
 #include "pros/rtos.hpp"
 #include "subsystems/drivetrain.h"
 #include "subsystems/intakes.h"
@@ -148,6 +148,14 @@ void configureEzDrive(ez::Drive& drive) {
     drive.odom_boomerang_distance_set(16 * okapi::inch);
     drive.odom_boomerang_dlead_set(0.625);
     drive.pid_angle_behavior_set(ez::shortest);
+    drive.pid_ramsete_constants_set(CONFIG::RAMSETE_ZETA, CONFIG::RAMSETE_BETA);
+    drive.pid_ltv_costs_set(
+        CONFIG::defaultDtCostQ().x(),
+        CONFIG::defaultDtCostQ().y(),
+        CONFIG::defaultDtCostQ().z(),
+        CONFIG::LTV_CONTROL_COST_V,
+        CONFIG::LTV_CONTROL_COST_OMEGA,
+        CONFIG::LTV_TERMINAL_SCALE);
     drive.drive_brake_set(pros::E_MOTOR_BRAKE_HOLD);
 }
 
@@ -498,41 +506,27 @@ void runExampleTurn() {
     ezDrive().pid_wait();
 }
 
-void runExamplePath() {
-    autonLog("Example Pure Pursuit start");
+void runExampleRamsete() {
+    autonLog("Example Ramsete start");
     prepareEzStart();
 
-    ezDrive().pid_odom_set(std::vector<ez::united_odom>{
-        {{6 * okapi::inch, 10 * okapi::inch}, ez::fwd, kDriveSpeed},
-        {{0 * okapi::inch, 20 * okapi::inch}, ez::fwd, kDriveSpeed},
-        {{0 * okapi::inch, 30 * okapi::inch}, ez::fwd, kDriveSpeed},
+    ezDrive().pid_odom_ramsete_set(std::vector<ez::united_odom>{
+        ezLocalMove(18.0, 0.0, ez::fwd, kDriveSpeed),
+        ezLocalMove(30.0, -10.0, ez::fwd, kDriveSpeed),
+        ezLocalMove(42.0, 0.0, ez::fwd, kDriveSpeed, 0 * okapi::degree),
     }, true);
-    ezDrive().pid_wait();
-    if (routineCancelled()) {
-        autonLog("Example Pure Pursuit cancelled on outbound");
-        return;
-    }
-
-    ezDrive().pid_odom_set({{0 * okapi::inch, 0 * okapi::inch}, ez::rev, kDriveSpeed}, true);
     ezDrive().pid_wait();
 }
 
 void runExampleLtv() {
-    autonLog("Example Boomerang start");
+    autonLog("Example LTV start");
     prepareEzStart();
 
-    ezDrive().pid_odom_set(
-        {{0 * okapi::inch, 24 * okapi::inch, 45 * okapi::degree}, ez::fwd, kDriveSpeed},
-        true);
-    ezDrive().pid_wait();
-    if (routineCancelled()) {
-        autonLog("Example Boomerang cancelled on outbound");
-        return;
-    }
-
-    ezDrive().pid_odom_set(
-        {{0 * okapi::inch, 0 * okapi::inch, 0 * okapi::degree}, ez::rev, kDriveSpeed},
-        true);
+    ezDrive().pid_odom_ltv_set(std::vector<ez::united_odom>{
+        ezLocalMove(18.0, 0.0, ez::fwd, kDriveSpeed),
+        ezLocalMove(30.0, 10.0, ez::fwd, kDriveSpeed),
+        ezLocalMove(42.0, 0.0, ez::fwd, kDriveSpeed, 0 * okapi::degree),
+    }, true);
     ezDrive().pid_wait();
 }
 
@@ -544,8 +538,8 @@ const AutonList kAvailableAutons = {{
     {Auton::EXAMPLE_MOVE, "Example Drive", &runExampleMove},
     {Auton::EXAMPLE_SWING, "Example Swing", &runExampleSwing},
     {Auton::EXAMPLE_TURN, "PID Calibration", &runExampleTurn},
-    {Auton::EXAMPLE_PATH, "Example Pure Pursuit", &runExamplePath},
-    {Auton::EXAMPLE_LTV, "Example Boomerang", &runExampleLtv},
+    {Auton::EXAMPLE_RAMSETE, "Example Ramsete", &runExampleRamsete},
+    {Auton::EXAMPLE_LTV, "Example LTV", &runExampleLtv},
     {Auton::SKILLS, "Skills", &runSkills},
     {Auton::NONE, "None", nullptr},
 }};

@@ -1,248 +1,153 @@
 # Autonomous and Motion
 
-## Symbol Index
+## Live Architecture
 
-| Symbol | Header | Purpose |
-|---|---|---|
-| `Auton`, `Alliance` | [`include/autonomous/autons.h`](../include/autonomous/autons.h) | selector-facing routine identifiers |
-| `AutonBuildContext` | [`include/autonomous/autonCommands.h`](../include/autonomous/autonCommands.h) | injected dependencies for auton builders |
-| `makeAutonCommand(...)` | [`include/autonomous/autonCommands.h`](../include/autonomous/autonCommands.h) | top-level auton factory |
-| `DriveMoveCommand` | [`include/commands/driveMove.h`](../include/commands/driveMove.h) | PID point move |
-| `RotateCommand` | [`include/commands/rotate.h`](../include/commands/rotate.h) | PID turn-in-place |
-| `PathCommand` | [`include/motionProfiling/pathCommand.h`](../include/motionProfiling/pathCommand.h) | common base for profile-following commands |
-| `RamseteCommand` | [`include/commands/ramsete.h`](../include/commands/ramsete.h) | RAMSETE path follower |
-| `LtvUnicycleCommand` | [`include/commands/ltvUnicycleController.h`](../include/commands/ltvUnicycleController.h) | LTV unicycle path follower |
-| `ProfileState`, `MotionProfile` | [`include/motionProfiling/motionProfile.h`](../include/motionProfiling/motionProfile.h) | time-parameterized path state |
-| `buildProfile(...)` | [`include/motionProfiling/profileBuilder.h`](../include/motionProfiling/profileBuilder.h) | trapezoidal motion-profile builder |
-| `buildBezierProfile(...)` | [`include/motionProfiling/profileBuilder.h`](../include/motionProfiling/profileBuilder.h) | Bezier-to-profile builder |
-| `buildProfileFromJson(...)` | [`include/motionProfiling/profileBuilder.h`](../include/motionProfiling/profileBuilder.h) | JSON-to-profile builder |
+The live autonomous path is no longer the old command-style motion stack.
 
-## Selector Enums
+Current flow:
+
+1. [`src/main.cpp`](../src/main.cpp) chooses the selected [`AutonEntry`](../include/autonomous/autons.h).
+2. [`bindAutonRuntime(...)`](../include/autonomous/autons.h) binds the current drivetrain, intake, lift, and optional pose/cancel hooks.
+3. [`runAuton(...)`](../include/autonomous/autons.h) calls the selected auton function directly in the current task.
+4. The auton function drives motion through the vendored EZ backend in [`include/EZ-Template/drive/drive.hpp`](../include/EZ-Template/drive/drive.hpp).
+
+The old `RamseteCommand`, `LtvUnicycleCommand`, and `PathCommand` headers still exist on disk, but they are not the live autonomous path.
+
+## Selector Surface
+
+Source: [`include/autonomous/autons.h`](../include/autonomous/autons.h)
 
 ```cpp
 enum class Auton {
     NEGATIVE_1,
     POSITIVE_1,
+    TUNE_DRIVE_PID,
+    TUNE_TURN_PID,
     EXAMPLE_MOVE,
+    EXAMPLE_SWING,
     EXAMPLE_TURN,
-    EXAMPLE_PATH,
+    EXAMPLE_RAMSETE,
     EXAMPLE_LTV,
     SKILLS,
     NONE
 };
 
-enum class Alliance {
-    RED,
-    BLUE
+struct AutonEntry {
+    Auton id;
+    const char *name;
+    AutonFn run;
 };
 ```
 
-Helper functions:
+Helpers:
 
 ```cpp
-const std::vector<Auton>& availableAutons();
-const char* autonName(Auton auton);
-const char* allianceName(Alliance alliance);
+bool initializeAutonMotion();
+const AutonList &availableAutons();
+const AutonEntry *findAuton(Auton auton);
+const char *autonName(Auton auton);
+void bindAutonRuntime(Drivetrain &drivetrain,
+                      Intakes &intakes,
+                      Lift &lift,
+                      std::function<Eigen::Vector3f()> poseSource,
+                      std::function<bool()> isCancelled = {});
+void resetAutonRuntime();
+bool runAuton(const AutonEntry &entry);
 ```
 
-## `AutonBuildContext`
+## EZ Motion Surface
+
+Source: [`include/EZ-Template/drive/drive.hpp`](../include/EZ-Template/drive/drive.hpp)
+
+These are the live autonomous motion entrypoints used by [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp):
+
+- `pid_drive_set(...)`
+- `pid_turn_set(...)`
+- `pid_swing_set(...)`
+- `pid_odom_set(...)`
+- `pid_odom_ramsete_set(...)`
+- `pid_odom_ltv_set(...)`
+- `pid_wait()`
+- `pid_wait_until(...)`
+- `pid_wait_until_index(...)`
+
+### EZ RAMSETE
 
 ```cpp
-struct AutonBuildContext {
-    Drivetrain& drivetrain;
-    Intakes& intakes;
-    Lift& lift;
-    std::function<Eigen::Vector3f()> poseSource;
-};
+void pid_ramsete_constants_set(double zeta, double beta);
+void pid_odom_ramsete_set(std::vector<odom> imovements, bool slew_on);
+void pid_odom_ramsete_set(std::vector<united_odom> p_imovements, bool slew_on);
 ```
 
-| Field | Type | Meaning |
-|---|---|---|
-| `drivetrain` | `Drivetrain&` | motion subsystem |
-| `intakes` | `Intakes&` | intake subsystem |
-| `lift` | `Lift&` | lift subsystem |
-| `poseSource` | `std::function<Eigen::Vector3f()>` | guarded controller pose provider |
+Contract:
 
-## `autonCommands::makeAutonCommand(...)`
+- uses EZ odom only
+- accepts EZ waypoint lists
+- forward-only in the current ship build
+- rejects empty, reverse, or mixed-direction tracked paths
+- runs under EZ drive-mode ownership, not the old command scheduler
+
+### EZ LTV
 
 ```cpp
-std::unique_ptr<Command> makeAutonCommand(Auton auton, const AutonBuildContext& ctx);
+void pid_ltv_costs_set(double qx, double qy, double qtheta,
+                       double rv, double romega,
+                       double terminal_scale = 1.0);
+void pid_odom_ltv_set(std::vector<odom> imovements, bool slew_on);
+void pid_odom_ltv_set(std::vector<united_odom> p_imovements, bool slew_on);
 ```
 
-Dispatch point from selector state to concrete builder functions in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp).
+Contract:
 
-## `DriveMoveCommand`
+- same EZ waypoint API as RAMSETE
+- same forward-only restrictions in the current ship build
+- uses a precomputed finite-horizon LTV gain schedule internally
+- runs through EZ motor commands in the same `[-127, 127]` space as the rest of EZ
 
-```cpp
-DriveMoveCommand(Drivetrain* drivetrain,
-                 Eigen::Vector2f target,
-                 std::function<Eigen::Vector3f()> poseSource,
-                 float tolerance = 0.02f);
-```
+## Example Routines
 
-| Parameter | Meaning |
-|---|---|
-| `drivetrain` | controlled drivetrain subsystem |
-| `target` | field-frame `(x, y)` target in meters |
-| `poseSource` | current guarded `(x, y, theta)` pose |
-| `tolerance` | distance tolerance in meters |
+Source: [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp)
 
-Internal controllers:
+Current selector-visible examples:
 
-- forward: `CONFIG::DISTANCE_PID`
-- heading correction: `CONFIG::TURN_PID`
+- `Example Drive`
+- `Example Swing`
+- `PID Calibration`
+- `Example Ramsete`
+- `Example LTV`
+- `Tune Drive PID`
+- `Tune Turn PID`
 
-## `RotateCommand`
+`Negative 1`, `Positive 1`, and `Skills` are also direct-function EZ routines in the same file.
 
-```cpp
-RotateCommand(Drivetrain* drivetrain,
-              float targetAngle,
-              std::function<Eigen::Vector3f()> poseSource,
-              float tolerance = 0.03f);
-```
+## Wait Semantics
 
-| Parameter | Meaning |
-|---|---|
-| `targetAngle` | final heading in radians |
-| `poseSource` | current guarded pose provider |
-| `tolerance` | angular tolerance in radians |
+Tracked EZ modes now integrate with EZ waits:
 
-Internal controller:
+- `pid_wait()` settles on final XY and heading error
+- `pid_wait_until(point)` waits on tracked odom distance
+- `pid_wait_until_index(index)` uses an explicit waypoint-to-profile-sample map
 
-- heading: `CONFIG::TURN_PID`
+`pid_wait_quick_chain()` is not special-cased for RAMSETE or LTV in this build; it falls back to normal wait behavior.
 
-## `PathCommand`
+## Tuning Surface
 
-```cpp
-class PathCommand : public Command {
-public:
-    PathCommand(Drivetrain* drivetrain, MotionProfile profile);
-    void initialize() override;
-    bool isFinished() override;
-    void end(bool interrupted) override;
-    std::vector<Subsystem*> getRequirements() override;
+Primary tunables in [`include/config.h`](../include/config.h):
 
-protected:
-    float elapsedSeconds() const;
-};
-```
+- `TURN_PID`
+- `DISTANCE_PID`
+- `RAMSETE_ZETA`
+- `RAMSETE_BETA`
+- `defaultDtCostQ()`
+- `LTV_CONTROL_COST_V`
+- `LTV_CONTROL_COST_OMEGA`
+- `LTV_TERMINAL_SCALE`
+- `AUTON_DRIVE_SLEW_STEP`
+- `AUTON_TURN_SLEW_STEP`
 
-Common base for time-based profile followers.
+## Runtime Notes
 
-## `RamseteCommand`
-
-```cpp
-RamseteCommand(Drivetrain* drivetrain,
-               MotionProfile profile,
-               std::function<Eigen::Vector3f()> poseSource,
-               float zeta = CONFIG::RAMSETE_ZETA,
-               float beta = CONFIG::RAMSETE_BETA);
-```
-
-| Parameter | Meaning |
-|---|---|
-| `profile` | time-parameterized trajectory |
-| `poseSource` | current guarded pose provider |
-| `zeta` | damping coefficient |
-| `beta` | aggressiveness coefficient |
-
-Execution path:
-
-1. sample desired state from `MotionProfile`
-2. compute robot-frame pose error
-3. solve RAMSETE control law
-4. call `Drivetrain::setDriveSpeeds({v, omega})`
-
-## `LtvUnicycleCommand`
-
-```cpp
-LtvUnicycleCommand(Drivetrain* drivetrain,
-                   MotionProfile profile,
-                   std::function<Eigen::Vector3f()> poseSource,
-                   Eigen::Vector3f qWeights = CONFIG::DEFAULT_DT_COST_Q);
-
-LtvUnicycleCommand(Drivetrain* drivetrain,
-                   MotionProfile profile,
-                   std::function<Eigen::Vector3f()> poseSource,
-                   const StateMatrix& qWeights,
-                   const ControlMatrix& rWeights,
-                   const StateMatrix& terminalCost);
-```
-
-| Parameter | Meaning |
-|---|---|
-| `profile` | time-parameterized trajectory |
-| `poseSource` | current guarded pose provider |
-| `qWeights` | state-cost weights; either diagonal shorthand or a full `Q` matrix |
-| `rWeights` | control-effort cost matrix `R` |
-| `terminalCost` | terminal Riccati cost `Qf` |
-
-Execution path:
-
-1. linearize and discretize the unicycle tracking-error model across the profile
-2. solve the backward Riccati recursion to precompute `K[k]`
-3. sample desired state and robot-frame pose error at runtime
-4. apply `u = u_desired - K(t)e` and call `Drivetrain::setDriveSpeeds({v, omega})`
-
-## `ProfileState`
-
-```cpp
-struct ProfileState {
-    Eigen::Vector3f pose{0, 0, 0};
-    float linearVelocity = 0.0f;
-    float angularVelocity = 0.0f;
-    float linearAcceleration = 0.0f;
-};
-```
-
-## `MotionProfile`
-
-```cpp
-class MotionProfile {
-public:
-    MotionProfile(const Path& path,
-                  const TrapezoidalVelocityProfile& velProfile,
-                  int sampleCount = 200);
-
-    ProfileState sample(float t) const;
-    float totalTime() const;
-    bool isFinished(float t) const;
-    const std::vector<ProfileState>& samples() const;
-};
-```
-
-| Method | Meaning |
-|---|---|
-| `sample(t)` | interpolate a state at time `t` |
-| `totalTime()` | profile duration in seconds |
-| `isFinished(t)` | completion query for elapsed time |
-| `samples()` | pre-sampled lookup table |
-
-## Profile Builders
-
-Header: [`include/motionProfiling/profileBuilder.h`](../include/motionProfiling/profileBuilder.h)
-
-```cpp
-MotionProfile buildProfile(std::initializer_list<Eigen::Vector3f> waypoints,
-                           float maxVelocityMps,
-                           float maxAccelerationMps2,
-                           int sampleCount = 200,
-                           float initialSpeedMps = 0.0f,
-                           float endSpeedMps = 0.0f);
-```
-
-Use this when you want a public, copy-pasteable way to build a trapezoidal motion profile from ordinary `{x, y, theta}` waypoints.
-
-## Shared Auton Helpers
-
-Header: [`include/autonomous/sharedCommands.h`](../include/autonomous/sharedCommands.h)
-
-| Helper | Purpose |
-|---|---|
-| `shared::driveAndIntake(...)` | point move plus intake spin |
-| `shared::outtakeTimed(...)` | fixed-duration outtake |
-| `shared::liftCycle(...)` | up, wait, down lift sequence |
-| `shared::toggleTongue(...)` | one-shot tongue toggle |
-| `shared::toggleWing(...)` | one-shot wing toggle |
-| `shared::toggleSelect1(...)` | one-shot select1 toggle |
-| `shared::toggleSelect2(...)` | one-shot select2 toggle |
+- `initializeAutonMotion()` prepares one shared EZ drive backend during startup.
+- `prepareEzStart()` in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp) zeroes EZ odom before each example/competition routine.
+- The tracked EZ modes do not consume the old guarded fused pose. They use EZ odom only.
+- Autotune is still available, but it is a utility routine, not the primary competition motion path.

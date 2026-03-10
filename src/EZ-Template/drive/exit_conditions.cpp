@@ -120,6 +120,106 @@ void Drive::pid_wait() {
     }
   }
 
+  else if (mode == RAMSETE || mode == LTV) {
+    auto trackedExit = [&](const PID::exit_condition_& config,
+                           double error,
+                           bool stalled,
+                           bool overCurrent,
+                           int& smallTimerStart,
+                           int& bigTimerStart,
+                           int& velocityTimerStart,
+                           int& currentTimerStart) -> exit_output {
+      const int now = pros::millis();
+
+      if (config.small_exit_time > 0 && std::fabs(error) <= config.small_error) {
+        if (smallTimerStart < 0) smallTimerStart = now;
+        if (now - smallTimerStart >= config.small_exit_time) return SMALL_EXIT;
+      } else {
+        smallTimerStart = -1;
+      }
+
+      if (config.big_exit_time > 0 && std::fabs(error) <= config.big_error) {
+        if (bigTimerStart < 0) bigTimerStart = now;
+        if (now - bigTimerStart >= config.big_exit_time) return BIG_EXIT;
+      } else {
+        bigTimerStart = -1;
+      }
+
+      if (config.velocity_exit_time > 0 && stalled) {
+        if (velocityTimerStart < 0) velocityTimerStart = now;
+        if (now - velocityTimerStart >= config.velocity_exit_time) return VELOCITY_EXIT;
+      } else {
+        velocityTimerStart = -1;
+      }
+
+      if (config.mA_timeout > 0 && overCurrent) {
+        if (currentTimerStart < 0) currentTimerStart = now;
+        if (now - currentTimerStart >= config.mA_timeout) return mA_EXIT;
+      } else {
+        currentTimerStart = -1;
+      }
+
+      return RUNNING;
+    };
+
+    exit_output xy_exit = RUNNING;
+    exit_output a_exit = RUNNING;
+    int xy_small_start = -1;
+    int xy_big_start = -1;
+    int xy_vel_start = -1;
+    int xy_ma_start = -1;
+    int a_small_start = -1;
+    int a_big_start = -1;
+    int a_vel_start = -1;
+    int a_ma_start = -1;
+
+    while (xy_exit == RUNNING || a_exit == RUNNING) {
+      if (mode != RAMSETE && mode != LTV) {
+        xyPID.timers_reset();
+        current_a_odomPID.timers_reset();
+        return;
+      }
+      if (!tracked_mode_active()) {
+        xyPID.timers_reset();
+        current_a_odomPID.timers_reset();
+        return;
+      }
+
+      const pose current = odom_pose_get();
+      const double xy_error = util::distance_to_point(tracked_goal, current);
+      const double a_error = std::fabs(util::turn_shortest(tracked_goal.theta, current.theta) - current.theta);
+      const double max_velocity = std::max(std::fabs(static_cast<double>(drive_velocity_left())),
+                                           std::fabs(static_cast<double>(drive_velocity_right())));
+      const bool stalled = max_velocity < 1.0;
+      const bool overCurrent = drive_current_left_over() || drive_current_right_over();
+
+      xy_exit = xy_exit != RUNNING
+          ? xy_exit
+          : trackedExit(xyPID.exit, xy_error, stalled, overCurrent,
+                        xy_small_start, xy_big_start, xy_vel_start, xy_ma_start);
+      a_exit = a_exit != RUNNING
+          ? a_exit
+          : trackedExit(current_a_odomPID.exit, a_error, stalled, overCurrent,
+                        a_small_start, a_big_start, a_vel_start, a_ma_start);
+      pros::delay(util::DELAY_TIME);
+    }
+
+    if (print_toggle) {
+      std::cout << "  Tracked XY: " << exit_to_string(xy_exit)
+                << " Exit, error: " << util::distance_to_point(tracked_goal, odom_pose_get())
+                << ".   Angle: " << exit_to_string(a_exit)
+                << " Exit, error: "
+                << std::fabs(util::turn_shortest(tracked_goal.theta, odom_theta_get()) - odom_theta_get())
+                << ".\n";
+    }
+
+    if (xy_exit == mA_EXIT || xy_exit == VELOCITY_EXIT || a_exit == mA_EXIT || a_exit == VELOCITY_EXIT) {
+      interfered = true;
+    }
+    xyPID.timers_reset();
+    current_a_odomPID.timers_reset();
+  }
+
   // Odom Exits
   else if (mode == POINT_TO_POINT || mode == PURE_PURSUIT) {
     exit_output xy_exit = RUNNING;
@@ -355,6 +455,20 @@ void Drive::pid_wait_until(double target) {
 void Drive::pid_wait_until_point(pose target) {
   pros::delay(10);
 
+  if (mode == RAMSETE || mode == LTV) {
+    const double threshold = std::max(odom_look_ahead_get() / 2.0, xyPID.exit.small_error);
+    while (util::distance_to_point(target, odom_pose_get()) > threshold) {
+      if (mode != RAMSETE && mode != LTV) {
+        return;
+      }
+      if (!tracked_mode_active()) {
+        return;
+      }
+      pros::delay(util::DELAY_TIME);
+    }
+    return;
+  }
+
   int xy_sgn = util::sgn(is_past_target(target, odom_pose_get()));
 
   exit_output xy_exit = RUNNING;
@@ -395,8 +509,32 @@ void Drive::pid_wait_until_index_started(int index) {
   // Let the PID run at least 1 iteration
   pros::delay(util::DELAY_TIME);
 
-  if (index > injected_pp_index.size() - 2 || index < 0)
-    printf("  Wait Until PP Error!  Index %i is not within range!  %i is max!\n", index, injected_pp_index.size() - 2);
+  if (mode == RAMSETE || mode == LTV) {
+    const int maxIndex = static_cast<int>(tracked_waypoint_sample_index.size()) - 1;
+    if (index < 0 || index > maxIndex) {
+      printf("  Wait Until Tracked Error!  Index %i is not within range!  %zu is max!\n",
+             index,
+             tracked_waypoint_sample_index.empty() ? 0U : tracked_waypoint_sample_index.size() - 1U);
+      return;
+    }
+
+    while (tracked_current_sample_index < tracked_waypoint_sample_index[static_cast<std::size_t>(index)]) {
+      if (mode != RAMSETE && mode != LTV) {
+        return;
+      }
+      if (!tracked_mode_active()) {
+        return;
+      }
+      pros::delay(util::DELAY_TIME);
+    }
+    return;
+  }
+
+  const int maxIndex = static_cast<int>(injected_pp_index.size()) - 2;
+  if (index < 0 || index > maxIndex) {
+    printf("  Wait Until PP Error!  Index %i is not within range!  %i is max!\n", index, maxIndex);
+    return;
+  }
   index += 1;
 
   exit_output xy_exit = RUNNING;
@@ -421,7 +559,31 @@ void Drive::pid_wait_until_index_started(int index) {
 }
 
 void Drive::pid_wait_until_index(int index) {
+  if (mode == RAMSETE || mode == LTV) {
+    pid_wait_until_index_started(index);
+    if (mode != RAMSETE && mode != LTV) {
+      return;
+    }
+    if (index < 0 || index >= static_cast<int>(tracked_waypoints.size())) {
+      return;
+    }
+
+    const pose target = tracked_waypoints[static_cast<std::size_t>(index)];
+    const double threshold = std::max(odom_look_ahead_get() / 2.0, xyPID.exit.small_error);
+    while (util::distance_to_point(target, odom_pose_get()) > threshold) {
+      if (!tracked_mode_active()) {
+        return;
+      }
+      pros::delay(util::DELAY_TIME);
+    }
+    return;
+  }
+
   pid_wait_until_index_started(index);
+  const int maxIndex = static_cast<int>(injected_pp_index.size()) - 2;
+  if (index < 0 || index > maxIndex) {
+    return;
+  }
   index += 1;
   pose target = pp_movements[injected_pp_index[index]].target;
   pid_wait_until_point(target);
@@ -431,6 +593,9 @@ void Drive::pid_wait_until_index(int index) {
 void Drive::pid_wait_quick() {
   if (mode == PURE_PURSUIT) {
     pid_wait_until_index(injected_pp_index.size() - 2);
+    return;
+  } else if (mode == RAMSETE || mode == LTV) {
+    pid_wait();
     return;
   } else if (mode == POINT_TO_POINT) {
     pid_wait_until_point(odom_target_start);
@@ -479,6 +644,11 @@ double Drive::pid_swing_chain_backward_constant_get() { return swing_backward_mo
 
 // Pid wait that hold momentum into the next motion
 void Drive::pid_wait_quick_chain() {
+  if (mode == RAMSETE || mode == LTV) {
+    pid_wait();
+    return;
+  }
+
   // If driving, add drive_motion_chain_scale to target
   if (mode == DRIVE) {
     double chain_scale = motion_chain_backward ? drive_backward_motion_chain_scale : drive_forward_motion_chain_scale;

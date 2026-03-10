@@ -33,45 +33,39 @@ Most autonomous issues are not autonomous issues. They are startup or localizati
 
 ### Routines to use
 
-- `Example Move`
-- `Example Turn`
-- `Example Path`
+- `Example Drive`
+- `Example Swing`
+- `PID Calibration`
+- `Example Ramsete`
 - `Example LTV`
 
 These are intentionally included in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp) so you can test one motion style at a time.
 
 ### Suggested order
 
-1. Run `Example Move` to validate point driving.
-2. Run `Example Turn` to validate heading control.
-3. Run `Example Path` to validate profile following and intake parallelism.
-4. Run `Example LTV` to compare LTV tracking on the same path shape.
+1. Run `Example Drive` to validate straight drive motion.
+2. Run `Example Swing` to validate swing direction and side.
+3. Run `PID Calibration` to validate heading control.
+4. Run `Example Ramsete` to validate profile following.
+5. Run `Example LTV` to compare LTV tracking on the same path shape.
 
 ### Why this is better than tuning on a scoring auton
 
 You remove scoring timing, branching logic, and mechanism noise. If a simple example fails, the problem is in motion or localization, not game strategy.
 
-## Tutorial 3: Tune `DriveMoveCommand`
+## Tutorial 3: Tune EZ Drive Motion
 
 **Goal:** improve point-to-point movement.
 
 **Primary files:**
 
-- [`include/commands/driveMove.h`](../include/commands/driveMove.h)
+- [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp)
+- [`include/EZ-Template/drive/drive.hpp`](../include/EZ-Template/drive/drive.hpp)
 - [`include/config.h`](../include/config.h)
-
-Core behavior:
-
-```cpp
-float driveOut = m_distPid.calculate(0.0f, dist);
-float turnOut  = m_turnPid.calculate(
-    0.0f,
-    utils::angleDifference(targetAngle, pose.z()));
-```
 
 ### Recommended process
 
-1. Use `Example Move` or a temporary short `DriveMoveCommand`.
+1. Use `Example Drive`.
 2. Start with a straight move to a nearby point.
 3. Tune `DISTANCE_PID.kP` first.
 4. Add or adjust `kD` only if it overshoots or rings.
@@ -83,16 +77,17 @@ float turnOut  = m_turnPid.calculate(
 - It does not oscillate near the target.
 - It does not spin excessively on approach.
 
-## Tutorial 4: Tune `RotateCommand`
+## Tutorial 4: Tune EZ Turning
 
 **Goal:** improve turn-in-place behavior.
 
 **Primary files:**
 
-- [`include/commands/rotate.h`](../include/commands/rotate.h)
+- [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp)
+- [`include/EZ-Template/drive/drive.hpp`](../include/EZ-Template/drive/drive.hpp)
 - [`include/config.h`](../include/config.h)
 
-Use `Example Turn` as the test surface.
+Use `PID Calibration` as the test surface.
 
 ### Recommended process
 
@@ -101,27 +96,27 @@ Use `Example Turn` as the test surface.
 3. Increase `TURN_PID.kD` if the robot overshoots and snaps back.
 4. Reboot and recheck IMU stability before making large PID changes.
 
-## Tutorial 5: Tune `RamseteCommand`
+## Tutorial 5: Tune EZ RAMSETE
 
 **Goal:** improve path tracking quality.
 
 **Primary files:**
 
-- [`include/commands/ramsete.h`](../include/commands/ramsete.h)
-- [`include/motionProfiling/motionProfile.h`](../include/motionProfiling/motionProfile.h)
+- [`include/EZ-Template/drive/drive.hpp`](../include/EZ-Template/drive/drive.hpp)
+- [`src/EZ-Template/drive/tracked_modes.cpp`](../src/EZ-Template/drive/tracked_modes.cpp)
 - [`include/config.h`](../include/config.h)
 
-The core control law reads the current pose from `poseSource`, samples the desired profile state, and sends `{v, omega}` to the drivetrain.
+The live tracked path code now runs through `pid_odom_ramsete_set(...)`.
 
 ### Recommended process
 
-1. Use `Example Path`.
+1. Use `Example Ramsete`.
 2. Lower max velocity and acceleration before touching controller gains if the robot looks saturated.
 3. Increase `RAMSETE_BETA` carefully if tracking is too loose.
 4. Increase `RAMSETE_ZETA` if it needs more damping.
 5. If the path still looks wrong, validate pose quality before doing more controller tuning.
 
-If you want a same-path controller comparison, run `Example LTV` after each Ramsete change so you can separate profile geometry issues from controller-specific issues.
+If you want a same-path controller comparison, run `Example LTV` after each change so you can separate path geometry issues from controller-specific issues.
 
 ## Tutorial 6: Create Your First Custom Auton
 
@@ -131,44 +126,42 @@ If you want a same-path controller comparison, run `Example LTV` after each Rams
 
 - [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp)
 - [`include/autonomous/autons.h`](../include/autonomous/autons.h)
-- [`include/autonomous/sharedCommands.h`](../include/autonomous/sharedCommands.h)
 
 ### Good starting point
 
-Copy `makeExampleMove()`, `makeExampleTurn()`, or `makeExamplePath()` instead of copying `Skills`.
+Copy `runExampleMove()`, `runExampleTurn()`, or `runExampleRamsete()` instead of copying `Skills`.
 
 ### Minimal workflow
 
-1. Copy the closest `make...()` builder.
+1. Copy the closest `run...()` routine.
 2. Rename it.
-3. Edit the points, headings, or command order.
+3. Edit the EZ points, headings, or command order.
 4. Add the enum entry.
-5. Add the new case to `makeAutonCommand(...)`.
-6. Add the new selector label through `kAvailableAutons` and `autonName()`.
+5. Add the new selector label through `kAvailableAutons`.
 
 For a more recipe-style version of this, read [Autonomous Cookbook](AUTONOMOUS_COOKBOOK.md).
 
-## Tutorial 7: Build a New Motion Profile
+## Tutorial 7: Build a New Tracked Path
 
-**Goal:** create a new profiled path.
+**Goal:** create a new tracked path.
 
-Inside [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp), reuse the local helper:
+Inside [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp), follow the existing EZ tracked examples:
 
 ```cpp
-MotionProfile profile = buildProfile({
-    Eigen::Vector3f(0.0f, 0.0f, 0.0f),
-    Eigen::Vector3f(0.5f, 0.0f, 0.0f),
-    Eigen::Vector3f(1.0f, 0.3f, 0.4f),
-}, 1.2f, 2.0f);
+ezDrive().pid_odom_ramsete_set(std::vector<ez::united_odom>{
+    ezLocalMove(18.0, 0.0, ez::fwd, kDriveSpeed),
+    ezLocalMove(30.0, -10.0, ez::fwd, kDriveSpeed),
+    ezLocalMove(42.0, 0.0, ez::fwd, kDriveSpeed, 0 * okapi::degree),
+}, true);
 ```
 
 Interpretation:
 
-- `x`, `y`: meters
-- `theta`: radians
-- final arguments: max velocity and max acceleration
+- `forward`, `left`: inches in the local EZ frame
+- the final heading is optional on the last point
+- the final integer is the EZ speed cap
 
-If you need profile creation outside `autons.cpp`, move the helper into a shared header/source pair instead of duplicating it.
+The live RAMSETE/LTV backend converts those EZ waypoints into an internal time-parameterized profile automatically.
 
 ## Tutorial 8: Debug Localization Regressions
 

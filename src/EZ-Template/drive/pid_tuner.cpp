@@ -11,6 +11,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "pros/llemu.hpp"
 #include "pros/misc.h"
 
+using namespace ez;
+
 // Is the PID Tuner enabled?
 bool Drive::pid_tuner_enabled() { return pid_tuner_on; }
 

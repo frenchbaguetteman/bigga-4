@@ -7,6 +7,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "EZ-Template/drive/drive.hpp"
 #include "okapi/api/units/QAngle.hpp"
 
+using namespace ez;
+
 /////
 // Set constants
 /////
@@ -384,7 +386,7 @@ void Drive::raw_pid_odom_pp_set(std::vector<odom> imovements, bool slew_on) {
 
   // Initialize slew
   int dir = current_drive_direction == REV ? -1 : 1;  // If we're going backwards, add a -1
-  double dist_to_target = util::distance_to_point(pp_movements.end()->target, odom_pose_get()) * dir;
+  double dist_to_target = util::distance_to_point(pp_movements.back().target, odom_pose_get()) * dir;
   slew_left.initialize(slew_on, max_speed, dist_to_target + l_start, l_start);
   slew_right.initialize(slew_on, max_speed, dist_to_target + r_start, r_start);
 

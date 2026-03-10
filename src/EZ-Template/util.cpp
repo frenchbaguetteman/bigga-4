@@ -12,8 +12,6 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 pros::Controller master(pros::E_CONTROLLER_MASTER);
 
 namespace ez {
-int mode = DISABLE;
-
 void ez_template_print() {
   std::cout << R"(
 
@@ -55,7 +53,7 @@ std::string get_rest_of_the_word(std::string text, int position) {
 
 void screen_print(std::string text, int line) {
   int CurrAutoLine = line;
-  std::vector<string> texts = {};
+  std::vector<std::string> texts = {};
   std::string temp = "";
 
   for (int i = 0; i < text.length(); i++) {
@@ -125,6 +123,10 @@ std::string exit_to_string(exit_output input) {
 }
 namespace util {
 bool AUTON_RAN = true;
+
+bool sd_card_active() {
+  return pros::usd::is_installed();
+}
 
 int places_after_decimal(double input, int min) {
   std::string in = std::to_string(input);

@@ -14,10 +14,6 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "okapi/api/units/QAngle.hpp"
 #include "okapi/api/units/QLength.hpp"
 #include "okapi/api/units/QTime.hpp"
-#include "util.hpp"
-
-using namespace okapi::literals;
-
 /**
  * Controller.
  */
@@ -79,7 +75,9 @@ enum e_mode { DISABLE = 0,
               TURN_TO_POINT = 3,
               DRIVE = 4,
               POINT_TO_POINT = 5,
-              PURE_PURSUIT = 6 };
+              PURE_PURSUIT = 6,
+              RAMSETE = 7,
+              LTV = 8 };
 
 /**
  * Enum for drive directions.
@@ -109,7 +107,7 @@ enum e_angle_behavior { raw = 0,
                         longest = 4 };
 
 const double ANGLE_NOT_SET = 0.0000000000000000000001;
-const okapi::QAngle p_ANGLE_NOT_SET = 0.0000000000000000000001_deg;
+const okapi::QAngle p_ANGLE_NOT_SET = okapi::QAngle(0.0000000000000000000001);
 
 /**
  * Struct for coordinates.
@@ -220,7 +218,7 @@ double clamp(double input, double max);
 /**
  * Is the SD card plugged in?
  */
-const bool SD_CARD_ACTIVE = pros::usd::is_installed();
+bool sd_card_active();
 
 /**
  * Delay time for tasks, this is set to 10 ms.

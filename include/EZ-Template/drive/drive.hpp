@@ -20,8 +20,6 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "pros/motor_group.hpp"
 #include "pros/motors.h"
 
-using namespace ez;
-
 namespace ez {
 class Drive {
  public:
@@ -1709,6 +1707,40 @@ class Drive {
    *        ramp up from a lower speed to your target speed
    */
   void pid_odom_set(std::vector<united_odom> p_imovements, bool slew_on);
+
+  /**
+   * Sets the RAMSETE tracking constants.
+   */
+  void pid_ramsete_constants_set(double zeta, double beta);
+
+  /**
+   * Sets the LTV tracking cost weights.
+   */
+  void pid_ltv_costs_set(double qx, double qy, double qtheta, double rv, double romega, double terminal_scale = 1.0);
+
+  /**
+   * Starts a RAMSETE-tracked odom motion.
+   */
+  void pid_odom_ramsete_set(odom imovement);
+  void pid_odom_ramsete_set(odom imovement, bool slew_on);
+  void pid_odom_ramsete_set(united_odom p_imovement);
+  void pid_odom_ramsete_set(united_odom p_imovement, bool slew_on);
+  void pid_odom_ramsete_set(std::vector<odom> imovements);
+  void pid_odom_ramsete_set(std::vector<odom> imovements, bool slew_on);
+  void pid_odom_ramsete_set(std::vector<united_odom> p_imovements);
+  void pid_odom_ramsete_set(std::vector<united_odom> p_imovements, bool slew_on);
+
+  /**
+   * Starts an LTV-tracked odom motion.
+   */
+  void pid_odom_ltv_set(odom imovement);
+  void pid_odom_ltv_set(odom imovement, bool slew_on);
+  void pid_odom_ltv_set(united_odom p_imovement);
+  void pid_odom_ltv_set(united_odom p_imovement, bool slew_on);
+  void pid_odom_ltv_set(std::vector<odom> imovements);
+  void pid_odom_ltv_set(std::vector<odom> imovements, bool slew_on);
+  void pid_odom_ltv_set(std::vector<united_odom> p_imovements);
+  void pid_odom_ltv_set(std::vector<united_odom> p_imovements, bool slew_on);
 
   /**
    * Sets the robot to move forward using PID with okapi units, only using slew if globally enabled.
@@ -3411,6 +3443,28 @@ class Drive {
   bool opcontrol_arcade_scaling_enabled();
 
  private:
+  enum tracking_controller_kind { TRACKING_NONE = 0, TRACKING_RAMSETE = 1, TRACKING_LTV = 2 };
+
+  struct tracked_sample {
+    pose pose_target{0.0, 0.0, 0.0};
+    double x_m = 0.0;
+    double y_m = 0.0;
+    double theta_rad = 0.0;
+    double linear_velocity_mps = 0.0;
+    double angular_velocity_rps = 0.0;
+    double linear_accel_mps2 = 0.0;
+    double time_sec = 0.0;
+  };
+
+  struct tracked_gain {
+    double k00 = 0.0;
+    double k01 = 0.0;
+    double k02 = 0.0;
+    double k10 = 0.0;
+    double k11 = 0.0;
+    double k12 = 0.0;
+  };
+
   void opcontrol_drive_activebrake_targets_set();
   double odom_smooth_weight_smooth = 0.0;
   double odom_smooth_weight_data = 0.0;
@@ -3427,6 +3481,30 @@ class Drive {
   std::vector<odom> pp_movements;
   std::vector<int> injected_pp_index;
   int pp_index = 0;
+  tracking_controller_kind tracked_controller = TRACKING_NONE;
+  std::vector<tracked_sample> tracked_samples;
+  std::vector<tracked_gain> tracked_ltv_gains;
+  std::vector<int> tracked_waypoint_sample_index;
+  std::vector<pose> tracked_waypoints;
+  pose tracked_goal = {0.0, 0.0, ANGLE_NOT_SET};
+  double tracked_total_time_sec = 0.0;
+  int tracked_start_ms = 0;
+  int tracked_current_sample_index = 0;
+  int tracked_speed_cap = 0;
+  double tracked_last_left_cmd = 0.0;
+  double tracked_last_right_cmd = 0.0;
+  bool tracked_slew_on = false;
+  double ramsete_zeta = 0.4;
+  double ramsete_beta = 45.0;
+  double ltv_qx = 1.0;
+  double ltv_qy = 1.0;
+  double ltv_qtheta = 10.0;
+  double ltv_rv = 1.0;
+  double ltv_romega = 1.0;
+  double ltv_terminal_scale = 1.0;
+  void reset_tracked_motion_state();
+  bool tracked_mode_active() const;
+  void start_tracked_motion(std::vector<odom> imovements, bool slew_on, e_mode tracking_mode);
   std::vector<odom> smooth_path(std::vector<odom> ipath, double weight_smooth, double weight_data, double tolerance);
   double is_past_target(pose target, pose current);
   void raw_pid_odom_pp_set(std::vector<odom> imovements, bool slew_on);
@@ -3595,6 +3673,9 @@ class Drive {
   void ptp_task();
   void boomerang_task();
   void pp_task();
+  void tracked_task(bool use_ltv);
+  void ramsete_task();
+  void ltv_task();
 
   /**
    * Starting value for left/right

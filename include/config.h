@@ -652,8 +652,8 @@ constexpr uint32_t PID_AUTOTUNE_TIMEOUT_ms = 15000;
 constexpr std::size_t PID_AUTOTUNE_REQUIRED_PEAK_PAIRS = 4;
 constexpr std::size_t PID_AUTOTUNE_ANALYSIS_PEAK_PAIRS = 3;
 
-inline constexpr PID::Gains TURN_PID      {3.2643f, 0.108629f, 65.3947f, 10.0f};
-inline constexpr PID::Gains DISTANCE_PID  {5.0f, 0.0f, 0.3f,  0.0f};
+inline constexpr ::PID::Gains TURN_PID      {3.2643f, 0.108629f, 65.3947f, 10.0f};
+inline constexpr ::PID::Gains DISTANCE_PID  {5.0f, 0.0f, 0.3f,  0.0f};
 
 // ── RAMSETE path-following parameters ───────────────────────────────────────
 
@@ -665,6 +665,10 @@ constexpr float RAMSETE_BETA = 45.0f;      // aggressiveness  (β > 0)
 inline Eigen::Vector3f defaultDtCostQ() {
     return Eigen::Vector3f(1.0f, 1.0f, 10.0f);
 }
+
+constexpr float LTV_CONTROL_COST_V = 1.0f;
+constexpr float LTV_CONTROL_COST_OMEGA = 1.0f;
+constexpr float LTV_TERMINAL_SCALE = 1.0f;
 
 // ── Drivetrain feedforward model ────────────────────────────────────────────
 

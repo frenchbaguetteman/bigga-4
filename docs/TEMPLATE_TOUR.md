@@ -8,10 +8,10 @@ Think of the robot as four layers:
 
 1. `main.cpp` owns the competition lifecycle.
 2. Subsystems wrap hardware.
-3. Commands express robot actions.
-4. Autonomous builders compose commands into full routines.
+3. EZ motion owns autonomous movement.
+4. Direct auton functions compose full routines from EZ primitives.
 
-If you only remember one thing, remember this: you usually do not write motor code directly inside `autonomous()`. You build commands and schedule them.
+If you only remember one thing, remember this: the live autonomous path is direct-function execution plus EZ motion, not the older command-graph builder path.
 
 ## Competition Lifecycle
 
@@ -21,66 +21,42 @@ The top-level flow lives in [`src/main.cpp`](../src/main.cpp):
 void initialize() {
     BrainScreen::initialize();
     AutonSelector::selectAuton(DEFAULT_AUTON_SELECTION);
-    AutonSelector::selectAlliance(DEFAULT_ALLIANCE_SELECTION);
+    createRobotObjects();
     subsystemInit();
-    drivetrain->calibrateImu();
+    initializeAutonMotion();
     localizationInit();
-    buildAutonCommand();
     AutonSelector::init();
-    ScreenManagerUI::init();
 }
 
 void autonomous() {
-    buildAutonCommand();
-    CommandScheduler::schedule(autonCommand.get());
+    runSelectedAutonNow();
 }
 
 void opcontrol() {
     CommandScheduler::reset();
-    // direct controller polling and driverArcade live here
+    // controller polling and optional Down+B auton launch live here
 }
 ```
 
 That is the main pattern throughout the repo:
 
 - `initialize()` prepares long-lived state
-- `autonomous()` builds and schedules a fresh command graph
+- `autonomous()` runs the selected auton entry directly
 - `opcontrol()` handles controller input and manual driving
 
-## Command-Based Architecture
+## Autonomous Architecture
 
-### A command is one robot action
+Autonomous routines live in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp) as direct functions. The shared motion backend is the vendored EZ drive in [`include/EZ-Template/drive/drive.hpp`](../include/EZ-Template/drive/drive.hpp).
 
-Examples from this repo:
+The live motion calls are:
 
-- `DriveMoveCommand`: drive to an `(x, y)` target
-- `RotateCommand`: turn to a heading
-- `RamseteCommand`: follow a time-parameterized path
-- `LtvUnicycleCommand`: follow a time-parameterized path with velocity-varying gains
-- `IntakeSpinCommand`: run the intake until cancelled
-
-Commands declare which subsystem they own, so the scheduler can prevent conflicts.
-
-### Commands compose into larger routines
-
-The builder helpers on `Command` let you chain behaviors:
-
-```cpp
-new RotateCommand(&ctx.drivetrain, kPi, ctx.poseSource);
-
-(new RamseteCommand(&ctx.drivetrain, profile, ctx.poseSource))
-    ->alongWith(new IntakeSpinCommand(&ctx.intakes, 127));
-```
-
-And command groups let you build multi-step routines:
-
-```cpp
-return std::make_unique<SequentialCommandGroup>(std::vector<Command*>{
-    new DriveMoveCommand(&ctx.drivetrain, forward, ctx.poseSource),
-    new WaitCommand(0.2f),
-    new DriveMoveCommand(&ctx.drivetrain, home, ctx.poseSource),
-});
-```
+- `pid_drive_set(...)`
+- `pid_turn_set(...)`
+- `pid_swing_set(...)`
+- `pid_odom_set(...)`
+- `pid_odom_ramsete_set(...)`
+- `pid_odom_ltv_set(...)`
+- `pid_wait(...)`
 
 ## How This Maps From EZ-Template
 
@@ -88,34 +64,14 @@ If you are used to EZ-Template, these are the closest equivalents in this repo:
 
 | EZ-Template style idea | This repo |
 |---|---|
-| Global chassis object | `Drivetrain` subsystem |
-| `pid_drive_set(...)` | `DriveMoveCommand` |
-| `pid_turn_set(...)` | `RotateCommand` |
-| Odom/path movement | `RamseteCommand` or `LtvUnicycleCommand` + `MotionProfile` |
+| Global chassis object | shared EZ drive backend |
+| `pid_drive_set(...)` | `pid_drive_set(...)` |
+| `pid_turn_set(...)` | `pid_turn_set(...)` |
+| Odom/path movement | `pid_odom_set(...)`, `pid_odom_ramsete_set(...)`, `pid_odom_ltv_set(...)` |
 | Auton selector pages | `AutonSelector` + `BrainScreen` |
-| Simple helper functions for auton | `shared::*` helpers in `include/autonomous/sharedCommands.h` |
+| Simple helper functions for auton | direct routine helpers in `src/autonomous/autons.cpp` |
 
-The big difference is composition. Instead of one big procedural auton function, this repo prefers small commands combined with `SequentialCommandGroup` and `ParallelCommandGroup`.
-
-## Autonomous Build Context
-
-Autonomous code receives a single context object:
-
-```cpp
-struct AutonBuildContext {
-    Drivetrain& drivetrain;
-    Intakes& intakes;
-    Lift& lift;
-    std::function<Eigen::Vector3f()> poseSource;
-};
-```
-
-That keeps auton builders clean:
-
-- the drivetrain and mechanisms are already injected
-- localization is exposed through `poseSource`
-- `poseSource` is already guarded against sudden fusion snaps before motion code sees it
-- builders return a new top-level `Command`
+The main difference from the older command-heavy branch is that the selected auton now runs inline through `runAuton(...)`.
 
 ## Coordinate System
 
@@ -134,7 +90,6 @@ This matters when you author waypoints. If a point looks mirrored or rotated, ch
 | Task | Primary file |
 |---|---|
 | Add or change an auton | [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp) |
-| Add shared auton helpers | [`include/autonomous/sharedCommands.h`](../include/autonomous/sharedCommands.h) |
 | Tune PID / RAMSETE / ports | [`include/config.h`](../include/config.h) |
 | Change driver controls | [`src/main.cpp`](../src/main.cpp) |
 | Change brain-screen behavior | [`src/ui/brainScreen.cpp`](../src/ui/brainScreen.cpp) |
@@ -145,12 +100,15 @@ The auton selector currently exposes these routines:
 
 1. `Negative 1`
 2. `Positive 1`
-3. `Example Move`
-4. `Example Turn`
-5. `Example Path`
-6. `Example LTV`
-7. `Skills`
-8. `None`
+3. `Tune Drive PID`
+4. `Tune Turn PID`
+5. `Example Drive`
+6. `Example Swing`
+7. `PID Calibration`
+8. `Example Ramsete`
+9. `Example LTV`
+10. `Skills`
+11. `None`
 
 The example routines are intentional. They make this repo much easier to learn because they isolate one motion style at a time.
 

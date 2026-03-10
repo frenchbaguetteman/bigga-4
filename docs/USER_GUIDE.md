@@ -104,20 +104,22 @@ The top bar exposes these pages:
 
 On the `SELECT` page:
 
-- tap `RED` or `BLUE` to set alliance
-- tap `PREV` or `NEXT` to cycle routines
-- tap `QUICK: SKILLS` to jump to `Skills`
+- tap the left half to go to the previous auton
+- tap the right half to go to the next auton
 
 The ordered autonomous list comes from [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp):
 
 1. `Negative 1`
 2. `Positive 1`
-3. `Example Move`
-4. `Example Turn`
-5. `Example Path`
-6. `Example LTV`
-7. `Skills`
-8. `None`
+3. `Tune Drive PID`
+4. `Tune Turn PID`
+5. `Example Drive`
+6. `Example Swing`
+7. `PID Calibration`
+8. `Example Ramsete`
+9. `Example LTV`
+10. `Skills`
+11. `None`
 
 ## Hardware Map
 
@@ -157,30 +159,29 @@ The main competition flow lives in [`src/main.cpp`](../src/main.cpp).
 `initialize()` performs these steps in order:
 
 1. Initializes the brain screen
-2. Applies default auton and alliance selections from [`include/auton.h`](../include/auton.h)
+2. Applies the default auton selection from [`include/auton.h`](../include/auton.h)
 3. Constructs subsystems
 4. Calibrates the IMU
 5. Builds localization sensor models
 6. Acquires a startup pose
 7. Synchronizes odometry to that pose
-8. Builds the currently selected autonomous command graph
+8. Prepares the shared EZ autonomous motion backend
 9. Starts the screen task and scheduler task
 
 When initialization is complete, the master controller rumbles once.
 
 ### `autonomous()`
 
-`autonomous()` rebuilds the auton command from the current selector state, then schedules it.
+`autonomous()` binds the current runtime and runs the selected auton directly.
 
 ### `opcontrol()`
 
 `opcontrol()`:
 
 - resets the command scheduler
-- cancels any leftover autonomous command
-- installs controller trigger bindings
-- allows EZ-style `Down + B` autonomous launch when off-field
-- runs shaped arcade drive whenever the drivetrain is not owned by another command
+- polls controller inputs
+- allows `Down + B` autonomous launch when off-field
+- runs shaped arcade drive
 
 ## Autonomous Selection and Slot Defaults
 
@@ -308,7 +309,7 @@ The highest-impact constants for day-to-day work are:
 - `RAMSETE_BETA`
 - `DEFAULT_DT_COST_Q`
 
-These matter for custom profiled paths and for the built-in `Example Path` and `Example LTV` routines.
+These matter for custom profiled paths and for the built-in `Example Ramsete` and `Example LTV` routines.
 
 ### Localization Confidence
 

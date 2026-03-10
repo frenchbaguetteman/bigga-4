@@ -39,13 +39,13 @@ void copyString(char* dst, std::size_t size, const char* src) {
     std::snprintf(dst, size, "%s", src ? src : "");
 }
 
-PID::Gains gainsFromKuPu(float kPScale,
-                        float tiScale,
-                        float tdScale,
-                        float ku,
-                        float puSec,
-                        float controllerDtSec) {
-    PID::Gains gains;
+::PID::Gains gainsFromKuPu(float kPScale,
+                          float tiScale,
+                          float tdScale,
+                          float ku,
+                          float puSec,
+                          float controllerDtSec) {
+    ::PID::Gains gains;
     gains.kP = kPScale * ku;
     const float continuousKi = (tiScale > 0.0f && puSec > 1e-5f)
         ? gains.kP / (tiScale * puSec)

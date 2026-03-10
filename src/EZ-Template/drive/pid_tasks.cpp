@@ -32,6 +32,12 @@ void Drive::ez_auto_task() {
       case PURE_PURSUIT:
         pp_task();
         break;
+      case RAMSETE:
+        ramsete_task();
+        break;
+      case LTV:
+        ltv_task();
+        break;
       case DISABLE:
         break;
       default:

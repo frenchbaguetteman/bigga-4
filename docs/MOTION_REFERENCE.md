@@ -136,7 +136,7 @@ Current default gains:
 
 Current usage note:
 
-- the built-in `Example Path` routine uses this controller over a trapezoidal motion profile
+- the built-in `Example Ramsete` routine uses this controller over a trapezoidal motion profile
 
 ### `LtvUnicycleCommand`
 
@@ -163,7 +163,7 @@ Behavior:
 
 Current usage note:
 
-- the built-in `Example LTV` routine uses this controller over the same trapezoidal profile shape as `Example Path`
+- the built-in `Example LTV` routine uses this controller over the same trapezoidal profile shape as `Example Ramsete`
 
 ### `RelayPidAutotuner`
 
@@ -271,7 +271,7 @@ Command sequence in chassis-facing inches:
 5. Turn to EZ absolute heading `0`.
 6. Drive back to `(47.24, -23.62)`.
 
-### `Example Move`
+### `Example Drive`
 
 Command sequence:
 
@@ -285,7 +285,7 @@ This routine is the simplest place to verify:
 - point-to-point odom moves
 - return-to-start behavior
 
-### `Example Turn`
+### `PID Calibration`
 
 Command sequence:
 
@@ -294,12 +294,12 @@ Command sequence:
 3. Turn to EZ absolute heading `180`.
 4. Turn to EZ absolute heading `0`.
 
-### `Example Path`
+### `Example Ramsete`
 
 Command sequence:
 
 1. Spin intake at `96`.
-2. Follow a trapezoidal motion profile with `RamseteCommand` through three robot-relative waypoints:
+2. Follow a tracked EZ RAMSETE path through three robot-relative waypoints:
    - `18 in` forward, `10 in` left, slight positive heading bias
    - `36 in` forward, `8 in` right, slight negative heading bias
    - `48 in` forward, back to the starting heading
@@ -311,7 +311,7 @@ Command sequence:
 Command sequence:
 
 1. Spin intake at `96`.
-2. Follow the same trapezoidal motion profile as `Example Path`, but with `LtvUnicycleCommand`.
+2. Follow the same tracked path shape as `Example Ramsete`, but with the EZ LTV mode.
 3. Outtake at `-127` for `0.3 s`.
 4. Return to the starting point.
 

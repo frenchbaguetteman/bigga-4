@@ -43,9 +43,6 @@
 // Motion profiling
 #include "motionProfiling/path.h"
 #include "motionProfiling/bezier.h"
-#include "motionProfiling/motionProfile.h"
-#include "motionProfiling/profileBuilder.h"
-#include "motionProfiling/pathCommand.h"
 
 // Localization
 #include "localization/sensor.h"
@@ -59,8 +56,6 @@
 #include "subsystems/lift.h"
 
 // Robot commands
-#include "commands/ramsete.h"
-#include "commands/ltvUnicycleController.h"
 #include "commands/driveMove.h"
 #include "commands/rotate.h"
 #include "commands/intake/intakeCommand.h"

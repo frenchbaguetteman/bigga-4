@@ -187,10 +187,10 @@ The example autons are not filler. They are the fastest tuning surfaces in the r
 
 - `Tune Drive PID` to relay-tune `CONFIG::DISTANCE_PID` on-robot
 - `Tune Turn PID` to relay-tune `CONFIG::TURN_PID` on-robot
-- `Example Move` for `DriveMoveCommand`
-- `Example Turn` for `RotateCommand`
-- `Example Path` for RAMSETE and profile tuning
-- `Example LTV` for LTV-unicycle and profile tuning
+- `Example Drive` for simple EZ drive motion
+- `PID Calibration` for EZ turn tuning
+- `Example Ramsete` for RAMSETE and profile tuning
+- `Example LTV` for LTV tracking and profile tuning
 
 That is usually better than tuning against a full match auton, because you remove game logic and mechanism timing from the test.
 
@@ -206,7 +206,7 @@ The UI status line will tell you when a tune is active, but the full numeric out
 - Mixing inches and meters in waypoint math.
 - Forgetting that headings are radians, not degrees.
 - Tuning motion before checking whether localization is sane.
-- Duplicating helper code instead of promoting it into `sharedCommands.h`.
+- Duplicating helper code instead of reusing the existing routine helpers in `autons.cpp`.
 - Editing one auton and forgetting that the selector or default header may still point at a different routine.
 
 ## Read Next

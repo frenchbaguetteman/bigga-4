@@ -8,6 +8,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "EZ-Template/drive/drive.hpp"
 #include "pros/misc.h"
 
+using namespace ez;
+
 void Drive::opcontrol_arcade_scaling(bool enable) { arcade_vector_scaling = enable; }
 bool Drive::opcontrol_arcade_scaling_enabled() { return arcade_vector_scaling; }
 
@@ -27,7 +29,7 @@ std::vector<double> Drive::opcontrol_curve_default_get() {
 // Initialize curve SD card
 void Drive::opcontrol_curve_sd_initialize() {
   // If no SD card, return
-  if (!ez::util::SD_CARD_ACTIVE) return;
+  if (!ez::util::sd_card_active()) return;
 
   FILE* l_usd_file_read;
   // If file exists...
@@ -61,7 +63,7 @@ void Drive::opcontrol_curve_sd_initialize() {
 // Save new left curve to SD card
 void Drive::save_l_curve_sd() {
   // If no SD card, return
-  if (!ez::util::SD_CARD_ACTIVE) return;
+  if (!ez::util::sd_card_active()) return;
 
   FILE* usd_file_write = fopen("/usd/left_curve.txt", "w");
   std::string in_str = std::to_string(left_curve_scale);
@@ -73,7 +75,7 @@ void Drive::save_l_curve_sd() {
 // Save new right curve to SD card
 void Drive::save_r_curve_sd() {
   // If no SD card, return
-  if (!ez::util::SD_CARD_ACTIVE) return;
+  if (!ez::util::sd_card_active()) return;
 
   FILE* usd_file_write = fopen("/usd/right_curve.txt", "w");
   std::string in_str = std::to_string(right_curve_scale);

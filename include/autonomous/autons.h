@@ -17,7 +17,7 @@ enum class Auton {
     EXAMPLE_MOVE,
     EXAMPLE_SWING,
     EXAMPLE_TURN,
-    EXAMPLE_PATH,
+    EXAMPLE_RAMSETE,
     EXAMPLE_LTV,
     SKILLS,
     NONE

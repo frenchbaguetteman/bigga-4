@@ -36,8 +36,8 @@ public:
     };
 
     struct GainSet {
-        PID::Gains zieglerNichols{};
-        PID::Gains noOvershoot{};
+        ::PID::Gains zieglerNichols{};
+        ::PID::Gains noOvershoot{};
     };
 
     struct Result {

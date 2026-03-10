@@ -6,10 +6,10 @@ The structure of this guide is intentionally close to the docs style used by PRO
 
 ## What You Get Out of the Box
 
-- A command-based robot architecture built on custom `Command`, `Subsystem`, and `CommandScheduler` classes.
+- A subsystem-based robot architecture with direct-function autonomous execution.
 - A `Drivetrain` subsystem with odometry, IMU integration, driver shaping, and feedforward path control.
 - A touch-screen auton selector and runtime brain screen.
-- Example autonomous routines for point moves, turns, and RAMSETE paths.
+- Example autonomous routines for drive, swing, calibration turns, RAMSETE, and LTV.
 - Localization that combines odometry, GPS, and particle-filter estimates.
 
 ## Start Reading Here
@@ -36,8 +36,8 @@ Then open `http://127.0.0.1:8000/`.
 |---|---|
 | `src/main.cpp` | Competition lifecycle, subsystem setup, and driver control loop |
 | `src/autonomous/autons.cpp` | Every selectable autonomous routine |
-| `include/autonomous/` | Auton enums, build context, and shared helper commands |
-| `include/commands/` | Reusable commands like drive, rotate, RAMSETE, intake, and lift |
+| `include/autonomous/` | Auton enums and direct auton runtime hooks |
+| `include/EZ-Template/` | Vendored EZ motion backend used by autonomous routines |
 | `include/subsystems/` | Drivetrain, intake, lift, and pneumatics interfaces |
 | `include/config.h` | PID gains, sensor ports, geometry, and driver tuning |
 | `src/ui/` and `include/ui/` | Brain screen and auton selector plumbing |
@@ -50,7 +50,7 @@ When the robot starts:
 - subsystems are constructed
 - the IMU calibrates
 - localization is initialized
-- the selected autonomous command graph is built
+- the shared EZ autonomous motion backend is prepared
 - the controller rumbles once when the robot is ready
 
 That startup sequence is implemented in [`src/main.cpp`](../src/main.cpp).
@@ -59,25 +59,28 @@ That startup sequence is implemented in [`src/main.cpp`](../src/main.cpp).
 
 This repo already includes four tutorial-grade routines:
 
-- `Example Move`
-- `Example Turn`
-- `Example Path`
+- `Example Drive`
+- `PID Calibration`
+- `Example Ramsete`
 - `Example LTV`
 
 Those are selectable through the normal auton chooser and live in [`src/autonomous/autons.cpp`](../src/autonomous/autons.cpp).
 
 ## Your First Safe Edit
 
-The easiest first edit is changing the travel distance in `Example Move`.
+The easiest first edit is changing the travel distance in `Example Drive`.
 
 Current pattern:
 
 ```cpp
-const Eigen::Vector2f forward = robotRelativePoint(start, 24.0f * kInToM, 0.0f);
-const Eigen::Vector2f diagonal = robotRelativePoint(start, 24.0f * kInToM, 18.0f * kInToM);
+ezDrive().pid_drive_set(24 * okapi::inch, kDriveSpeed, true);
+ezDrive().pid_wait();
+
+ezDrive().pid_drive_set(-12 * okapi::inch, kDriveSpeed);
+ezDrive().pid_wait();
 ```
 
-If you want a shorter test, reduce the `24.0f` values. If you want a longer diagonal, increase the forward or left offsets. That lets you test the command framework without touching selector plumbing or path-generation code.
+If you want a shorter test, reduce the `24` inch leg. That lets you test the live EZ motion path without touching selector plumbing or tracked-path code.
 
 ## Build and Test Workflow
 
